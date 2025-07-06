@@ -1,7 +1,7 @@
-import {NextRequest, NextResponse} from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { getAdminDb } from '@/lib/firebase-admin';
-import * as admin from 'firebase-admin';
+import { revalidatePath } from 'next/cache'; // Import revalidatePath
 
 const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
@@ -13,11 +13,11 @@ export async function POST(req: NextRequest) {
 
     if (!signature) {
         console.error("Webhook signature missing.");
-        return NextResponse.json({error: 'Signature missing'}, {status: 400});
+        return NextResponse.json({ error: 'Signature missing' }, { status: 400 });
     }
-     if (!webhookSecret) {
+    if (!webhookSecret) {
         console.error("Razorpay webhook secret is not set.");
-        return NextResponse.json({error: 'Webhook secret not configured'}, {status: 500});
+        return NextResponse.json({ error: 'Webhook secret not configured' }, { status: 500 });
     }
 
     try {
@@ -27,11 +27,14 @@ export async function POST(req: NextRequest) {
 
         if (digest !== signature) {
             console.error("Webhook signature mismatch.");
-            return NextResponse.json({error: 'Invalid signature'}, {status: 400});
+            return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
         }
         
         console.log("Webhook signature verified.");
         const payload = JSON.parse(body);
+
+        // Log the event type to help with debugging
+        console.log(`Received event: ${payload.event}`);
 
         // We are only interested in successful payment link payments
         if (payload.event === 'payment_link.paid') {
@@ -46,7 +49,7 @@ export async function POST(req: NextRequest) {
 
             if (!userId) {
                 console.error('User ID not found in webhook payload notes.');
-                return NextResponse.json({error: 'User ID missing'}, {status: 400});
+                return NextResponse.json({ error: 'User ID missing' }, { status: 400 });
             }
 
             console.log(`Processing payment for user: ${userId}, amount: ${amountPaid}`);
@@ -73,7 +76,7 @@ export async function POST(req: NextRequest) {
                 transaction.set(paymentRef, {
                     userId,
                     amount: amountPaid,
-                    date: new Date(paymentEntity.created_at * 1000), // Razorpay timestamp is in seconds
+                    date: new Date(paymentEntity.created_at * 1000),
                     notes: `Paid via Razorpay. Payment ID: ${paymentId}`,
                     type: 'razorpay',
                     createdAt: new Date(),
@@ -82,13 +85,21 @@ export async function POST(req: NextRequest) {
                     razorpay_signature: paymentEntity.signature,
                 });
             });
-            console.log(`Successfully recorded payment for user: ${userId}`);
+
+            // *** THIS IS THE KEY FIX ***
+            // After the database is updated, we tell Next.js to clear the cache
+            // for the user's dashboard, so they see the new data.
+            revalidatePath('/dashboard');
+            revalidatePath(`/admin/users`); // Also revalidate admin pages
+            revalidatePath(`/admin/dashboard`);
+
+            console.log(`Successfully recorded payment and revalidated paths for user: ${userId}`);
         }
 
-        return NextResponse.json({status: 'ok'});
+        return NextResponse.json({ status: 'ok' });
 
     } catch (error: any) {
         console.error('Error processing Razorpay webhook:', error.message);
-        return NextResponse.json({error: 'Webhook processing failed'}, {status: 500});
+        return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
     }
 }
