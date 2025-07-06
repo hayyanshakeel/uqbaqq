@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { getAllUsers } from "@/lib/data-service";
 import UsersClient from "./users-client";
 
