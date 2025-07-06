@@ -23,8 +23,7 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
 
     try {
         const userRef = adminDb.collection('users').doc(userId);
-        // Removed .orderBy() to prevent crashes from missing composite indexes.
-        // Sorting will be handled in the code.
+        // *** FIX: Removed .orderBy() to prevent crashes from missing composite indexes. ***
         const paymentsRef = adminDb.collection('payments').where('userId', '==', userId);
 
         const [userDoc, paymentsSnapshot] = await Promise.all([
@@ -49,18 +48,14 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
             let paymentDate: Date;
 
             if (data.date && typeof data.date.toDate === 'function') {
-                // Handles Firestore Timestamps
                 paymentDate = data.date.toDate();
             } else if (data.date && (typeof data.date === 'string' || typeof data.date === 'number')) {
-                // Handles ISO strings or Unix timestamps
                 paymentDate = new Date(data.date);
             } else {
-                console.warn(`Payment document ${doc.id} has a missing or unhandled date format. Using current date as fallback. Value:`, data.date);
                 paymentDate = new Date();
             }
 
             if (isNaN(paymentDate.getTime())) {
-                console.warn(`Could not parse date for payment ${doc.id}, resulting in an invalid date. Using current date as fallback. Original value:`, data.date);
                 paymentDate = new Date();
             }
 
@@ -72,10 +67,9 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
             };
         });
 
-        // Sort by date descending in the code
+        // *** FIX: Sorting is now done in the code, not in the database query. ***
         const sortedPayments = unsortedPayments.sort((a, b) => b.date.getTime() - a.date.getTime());
 
-        // Map to the final display format after sorting
         const paymentHistory: PaymentHistoryItem[] = sortedPayments.map(payment => {
             const dateString = format(payment.date, 'dd/MM/yyyy');
             return {
@@ -90,7 +84,6 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
 
     } catch (error) {
         console.error("Error fetching user dashboard data for UID:", userId, error);
-        // This generic error is a fallback. The detailed error is logged above.
         throw new Error("Could not fetch user data.");
     }
 }
@@ -120,8 +113,6 @@ export async function createPaymentLink(userId: string) {
     });
 
     const amountInPaisa = Math.round(pendingAmount * 100);
-
-    // This is your app's public URL. Make sure to set it in your environment variables.
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
 
     try {
