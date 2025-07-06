@@ -20,16 +20,12 @@ export async function addUserAction(formData: FormData) {
     }
 
     try {
-        // Create user in Firebase Auth
         const userRecord = await adminAuth.createUser({
             email,
             password,
             displayName: name,
-            // phone number needs to be in E.164 format for Firebase Auth
-            // we will just store it in firestore for now
         });
 
-        // Create user document in Firestore with the UID as the document ID
         await adminDb.collection('users').doc(userRecord.uid).set({
             name,
             phone,
@@ -37,7 +33,7 @@ export async function addUserAction(formData: FormData) {
             status: 'pending',
             joined: new Date().toISOString(),
             totalPaid: 0,
-            pending: 250, // Default pending amount
+            pending: 250,
         });
         
         revalidatePath('/admin/users');
@@ -62,17 +58,13 @@ export async function deleteUserAction(userId: string) {
     }
 
     try {
-        // Delete user from Firestore
         await adminDb.collection('users').doc(userId).delete();
-        
-        // Delete user from Firebase Auth
         await adminAuth.deleteUser(userId);
         
         revalidatePath('/admin/users');
         return { success: true, message: 'User deleted successfully from Auth and Firestore.' };
     } catch (error: any) {
         console.error('Error deleting user:', error);
-        // Handle case where user is not found in Auth (might have been deleted already)
         if (error.code === 'auth/user-not-found') {
             revalidatePath('/admin/users');
             return { success: true, message: 'User was already deleted from Auth, removed from list.'};
@@ -90,12 +82,8 @@ export async function recordPaymentAction(formData: FormData) {
 
     const amount = parseFloat(amountStr);
 
-    if (!userId || !amountStr || !paymentDateStr) {
-        return { success: false, message: 'User ID, amount, and date are required.' };
-    }
-
-    if (isNaN(amount) || amount <= 0) {
-        return { success: false, message: 'Amount must be a positive number.' };
+    if (!userId || !amountStr || !paymentDateStr || isNaN(amount) || amount <= 0) {
+        return { success: false, message: 'Please provide a valid user, amount, and date.' };
     }
 
     try {
@@ -103,11 +91,9 @@ export async function recordPaymentAction(formData: FormData) {
         
         await adminDb.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) {
-                throw new Error('User not found!');
-            }
-            const userData = userDoc.data()!;
+            if (!userDoc.exists) throw new Error('User not found!');
             
+            const userData = userDoc.data()!;
             const newTotalPaid = (userData.totalPaid || 0) + amount;
             const newPending = (userData.pending || 0) - amount;
 
@@ -130,7 +116,7 @@ export async function recordPaymentAction(formData: FormData) {
 
         revalidatePath('/admin/users');
         revalidatePath('/admin/dashboard');
-        revalidatePath(`/dashboard`); // Revalidate user dashboard
+        revalidatePath(`/dashboard`);
         return { success: true, message: `Payment of ₹${amount.toFixed(2)} recorded.` };
     } catch (error) {
         console.error('Error recording payment:', error);
@@ -144,17 +130,13 @@ export async function addMissedBillAction(formData: FormData) {
     const adminDb = getAdminDb();
     const userId = formData.get('userId') as string;
     const amountStr = formData.get('amount') as string;
-    const billingMonth = formData.get('billingMonth') as string; // YYYY-MM
+    const billingMonth = formData.get('billingMonth') as string;
     const notes = formData.get('notes') as string | null;
 
     const amount = parseFloat(amountStr);
 
-    if (!userId || !amountStr || !billingMonth) {
-        return { success: false, message: 'User ID, amount, and billing month are required.' };
-    }
-
-    if (isNaN(amount) || amount <= 0) {
-        return { success: false, message: 'Amount must be a positive number.' };
+    if (!userId || !amountStr || !billingMonth || isNaN(amount) || amount <= 0) {
+        return { success: false, message: 'Please provide a valid user, amount, and billing month.' };
     }
 
     try {
@@ -162,19 +144,16 @@ export async function addMissedBillAction(formData: FormData) {
 
         await adminDb.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) {
-                throw new Error('User not found!');
-            }
-            const userData = userDoc.data()!;
+            if (!userDoc.exists) throw new Error('User not found!');
 
+            const userData = userDoc.data()!;
             const newPending = (userData.pending || 0) + amount;
 
             transaction.update(userRef, {
                 pending: newPending,
-                status: 'pending' // if they were paid, now they are not
+                status: 'pending'
             });
 
-            // Using a new 'bills' collection to track dues explicitly.
             const billRef = adminDb.collection('bills').doc();
             transaction.set(billRef, {
                 userId,
@@ -188,7 +167,7 @@ export async function addMissedBillAction(formData: FormData) {
 
         revalidatePath('/admin/users');
         revalidatePath('/admin/dashboard');
-        revalidatePath(`/dashboard`); // Revalidate user dashboard
+        revalidatePath(`/dashboard`);
         return { success: true, message: `Missed bill of ₹${amount.toFixed(2)} added.` };
     } catch (error) {
         console.error('Error adding missed bill:', error);
@@ -199,23 +178,20 @@ export async function addMissedBillAction(formData: FormData) {
 
 export async function reverseLastPaymentAction(userId: string) {
     const adminDb = getAdminDb();
-    if (!userId) {
-        return { success: false, message: 'User ID is required.' };
-    }
+    if (!userId) return { success: false, message: 'User ID is required.' };
 
     try {
-        const paymentQuery = adminDb.collection('payments')
-            .where('userId', '==', userId)
-            .orderBy('createdAt', 'desc')
-            .limit(1);
-        
+        // *** FIX: Removed orderBy to prevent index error. We will sort in the code. ***
+        const paymentQuery = adminDb.collection('payments').where('userId', '==', userId);
         const paymentSnapshot = await paymentQuery.get();
 
         if (paymentSnapshot.empty) {
             return { success: false, message: 'No recorded payments found for this user to reverse.' };
         }
         
-        const lastPaymentDoc = paymentSnapshot.docs[0];
+        // *** FIX: Find the most recent payment by sorting the results here. ***
+        const lastPaymentDoc = paymentSnapshot.docs.sort((a, b) => b.data().createdAt.toMillis() - a.data().createdAt.toMillis())[0];
+        
         const lastPaymentData = lastPaymentDoc.data();
         const amount = lastPaymentData.amount;
         
@@ -223,11 +199,9 @@ export async function reverseLastPaymentAction(userId: string) {
 
         await adminDb.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) {
-                throw new Error('User not found!');
-            }
-            const userData = userDoc.data()!;
+            if (!userDoc.exists) throw new Error('User not found!');
             
+            const userData = userDoc.data()!;
             const newTotalPaid = (userData.totalPaid || 0) - amount;
             const newPending = (userData.pending || 0) + amount;
 
@@ -252,26 +226,21 @@ export async function reverseLastPaymentAction(userId: string) {
     }
 }
 
-
 export async function reverseLastBillAction(userId: string) {
     const adminDb = getAdminDb();
-    if (!userId) {
-        return { success: false, message: 'User ID is required.' };
-    }
+    if (!userId) return { success: false, message: 'User ID is required.' };
 
     try {
-        const billQuery = adminDb.collection('bills')
-            .where('userId', '==', userId)
-            .orderBy('createdAt', 'desc')
-            .limit(1);
-
+        // *** FIX: Removed orderBy to prevent index error. ***
+        const billQuery = adminDb.collection('bills').where('userId', '==', userId);
         const billSnapshot = await billQuery.get();
 
         if (billSnapshot.empty) {
             return { success: false, message: 'No recorded bills found for this user to reverse.' };
         }
 
-        const lastBillDoc = billSnapshot.docs[0];
+        // *** FIX: Find the most recent bill by sorting the results here. ***
+        const lastBillDoc = billSnapshot.docs.sort((a, b) => b.data().createdAt.toMillis() - a.data().createdAt.toMillis())[0];
         const lastBillData = lastBillDoc.data();
         const amount = lastBillData.amount;
 
@@ -279,11 +248,9 @@ export async function reverseLastBillAction(userId: string) {
 
         await adminDb.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) {
-                throw new Error('User not found!');
-            }
-            const userData = userDoc.data()!;
+            if (!userDoc.exists) throw new Error('User not found!');
             
+            const userData = userDoc.data()!;
             const newPending = (userData.pending || 0) - amount;
 
             transaction.update(userRef, {
