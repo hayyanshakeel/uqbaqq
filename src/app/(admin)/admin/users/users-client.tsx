@@ -29,7 +29,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{ action: () => void, title: string, description: string } | null>(null);
 
-
     const { toast } = useToast();
     const [isPending, startTransition] = useTransition();
 
@@ -66,7 +65,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setIsConfirmOpen(true);
     };
 
-    
     const handleRecordPayment = async (formData: FormData) => {
         startTransition(async () => {
             const result = await recordPaymentAction(formData);
@@ -229,12 +227,14 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     return (
         <>
             <main className="flex-1 space-y-4 p-4 md:p-8 pt-6">
-                <div className="flex items-center justify-between space-x-2">
+                {/* *** FIX: Header now uses flex-col on mobile and flex-row on larger screens *** */}
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
                         <h2 className="text-3xl font-bold font-headline tracking-tight">User Management</h2>
                         <p className="text-muted-foreground">Manage all committee members and their payment records.</p>
                     </div>
-                    <div className="flex items-center space-x-2">
+                    {/* *** FIX: Button group now wraps on mobile screens *** */}
+                    <div className="flex items-center space-x-2 flex-wrap gap-2">
                         <Button variant="outline" onClick={handleExportData}><Download className="mr-2 h-4 w-4" /> Export Data</Button>
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -347,16 +347,16 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                         <div className="space-y-4 md:hidden">
                              {filteredUsers.map((user) => (
                                 <Card key={user.id}>
-                                    <CardHeader className="p-4 flex flex-row items-center justify-between space-x-2">
+                                    <CardHeader className="p-4 flex flex-row items-start justify-between space-x-4">
                                         <div>
-                                            <CardTitle className="text-lg">{user.name}</CardTitle>
-                                            <CardDescription>{user.email}</CardDescription>
+                                            <CardTitle className="text-base">{user.name}</CardTitle>
+                                            <CardDescription className="text-xs break-all">{user.email}</CardDescription>
                                         </div>
                                         <div className="flex-shrink-0">
                                            <UserActionsDropdown user={user} />
                                         </div>
                                     </CardHeader>
-                                    <CardContent className="p-4 pt-0 space-y-3">
+                                    <CardContent className="p-4 pt-0 space-y-2">
                                         <div className="flex justify-between items-center text-sm">
                                             <span className="text-muted-foreground">Status</span>
                                             <Badge variant={user.status === 'paid' ? 'default' : user.status === 'pending' ? 'secondary' : 'destructive'}>
@@ -486,3 +486,4 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         </>
     );
 }
+
