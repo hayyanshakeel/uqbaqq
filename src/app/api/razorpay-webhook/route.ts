@@ -33,10 +33,8 @@ export async function POST(req: NextRequest) {
         console.log("Webhook signature verified.");
         const payload = JSON.parse(body);
 
-        // Log the event type to help with debugging
         console.log(`Received event: ${payload.event}`);
 
-        // We are only interested in successful payment link payments
         if (payload.event === 'payment_link.paid') {
             const adminDb = getAdminDb();
             console.log("Processing payment_link.paid event.");
@@ -44,7 +42,7 @@ export async function POST(req: NextRequest) {
             const paymentLinkEntity = payload.payload.payment_link.entity;
             
             const userId = paymentLinkEntity.notes?.userId;
-            const amountPaid = paymentEntity.amount / 100; // Convert from paisa to rupees
+            const amountPaid = paymentEntity.amount / 100;
             const paymentId = paymentEntity.id;
 
             if (!userId) {
@@ -86,11 +84,9 @@ export async function POST(req: NextRequest) {
                 });
             });
 
-            // *** THIS IS THE KEY FIX ***
-            // After the database is updated, we tell Next.js to clear the cache
-            // for the user's dashboard, so they see the new data.
+            // *** THIS IS THE KEY FIX FOR CACHING ***
             revalidatePath('/dashboard');
-            revalidatePath(`/admin/users`); // Also revalidate admin pages
+            revalidatePath(`/admin/users`);
             revalidatePath(`/admin/dashboard`);
 
             console.log(`Successfully recorded payment and revalidated paths for user: ${userId}`);
