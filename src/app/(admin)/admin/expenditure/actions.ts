@@ -1,6 +1,6 @@
 'use server';
 
-import { adminDb } from '@/lib/firebase-admin';
+import { getAdminDb } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
@@ -12,6 +12,7 @@ const ExpenseSchema = z.object({
 });
 
 export async function addExpenseAction(formData: FormData) {
+    const adminDb = getAdminDb();
     const rawData = {
         date: formData.get('date'),
         description: formData.get('description'),
@@ -49,6 +50,7 @@ export async function addExpenseAction(formData: FormData) {
 
 
 export async function deleteExpenseAction(expenseId: string) {
+    const adminDb = getAdminDb();
     if (!expenseId) {
         return { success: false, message: 'Expense ID is required.' };
     }
