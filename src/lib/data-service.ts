@@ -1,5 +1,5 @@
 'use server';
-import { adminDb } from './firebase-admin';
+import { getAdminDb } from './firebase-admin';
 import { startOfMonth, subMonths, format } from 'date-fns';
 import * as admin from 'firebase-admin';
 
@@ -26,6 +26,7 @@ export interface Expense {
 
 // A simplified aggregation. In a real large-scale app, this might be done with a Cloud Function.
 export async function getDashboardKpis() {
+    const adminDb = getAdminDb();
     const usersSnapshot = await adminDb.collection('users').get();
     const expendituresSnapshot = await adminDb.collection('expenditures').get();
     
@@ -63,6 +64,7 @@ export async function getDashboardKpis() {
 
 
 export async function getPaymentOverview() {
+    const adminDb = getAdminDb();
     const sixMonthsAgo = startOfMonth(subMonths(new Date(), 5));
     const paymentsSnapshot = await adminDb.collection('payments')
         .where('date', '>=', sixMonthsAgo)
@@ -111,6 +113,7 @@ export async function getPaymentOverview() {
 
 // This function is for the dashboard widget, so it only needs a subset of fields.
 export async function getUsersWithPendingPayments(): Promise<Pick<User, 'id' | 'name' | 'email' | 'pending'>[]> {
+    const adminDb = getAdminDb();
     const snapshot = await adminDb.collection('users')
         .where('pending', '>', 0)
         .orderBy('pending', 'desc')
@@ -132,6 +135,7 @@ export async function getUsersWithPendingPayments(): Promise<Pick<User, 'id' | '
 }
 
 export async function getAllUsers(): Promise<User[]> {
+    const adminDb = getAdminDb();
     const snapshot = await adminDb.collection('users').orderBy('name').get();
 
     if (snapshot.empty) {
@@ -158,6 +162,7 @@ export async function getAllUsers(): Promise<User[]> {
 
 
 export async function getAllExpenditures(): Promise<Expense[]> {
+    const adminDb = getAdminDb();
     const snapshot = await adminDb.collection('expenditures').orderBy('date', 'desc').get();
 
     if (snapshot.empty) {
