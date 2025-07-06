@@ -1,9 +1,11 @@
 'use server';
 
-import { adminDb, adminAuth } from '@/lib/firebase-admin';
+import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
 
 export async function addUserAction(formData: FormData) {
+    const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
     const name = formData.get('name') as string;
     const phone = formData.get('phone') as string;
     const email = formData.get('email') as string;
@@ -53,6 +55,8 @@ export async function addUserAction(formData: FormData) {
 }
 
 export async function deleteUserAction(userId: string) {
+    const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
     if (!userId) {
         return { success: false, message: 'User ID is required.' };
     }
@@ -78,6 +82,7 @@ export async function deleteUserAction(userId: string) {
 }
 
 export async function recordPaymentAction(formData: FormData) {
+    const adminDb = getAdminDb();
     const userId = formData.get('userId') as string;
     const amountStr = formData.get('amount') as string;
     const paymentDateStr = formData.get('paymentDate') as string;
@@ -136,6 +141,7 @@ export async function recordPaymentAction(formData: FormData) {
 
 
 export async function addMissedBillAction(formData: FormData) {
+    const adminDb = getAdminDb();
     const userId = formData.get('userId') as string;
     const amountStr = formData.get('amount') as string;
     const billingMonth = formData.get('billingMonth') as string; // YYYY-MM
@@ -192,6 +198,7 @@ export async function addMissedBillAction(formData: FormData) {
 }
 
 export async function reverseLastPaymentAction(userId: string) {
+    const adminDb = getAdminDb();
     if (!userId) {
         return { success: false, message: 'User ID is required.' };
     }
@@ -247,6 +254,7 @@ export async function reverseLastPaymentAction(userId: string) {
 
 
 export async function reverseLastBillAction(userId: string) {
+    const adminDb = getAdminDb();
     if (!userId) {
         return { success: false, message: 'User ID is required.' };
     }
