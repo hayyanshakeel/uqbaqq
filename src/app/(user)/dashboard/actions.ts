@@ -15,6 +15,8 @@ export interface PaymentHistoryItem {
     amount: number;
     date: string;
     notes: string;
+    // Add the payment ID field to be passed to the UI
+    razorpay_payment_id?: string;
 }
 
 export async function getUserDashboardData(userId: string): Promise<{user: UserDashboardData, paymentHistory: PaymentHistoryItem[]} | null> {
@@ -23,7 +25,6 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
 
     try {
         const userRef = adminDb.collection('users').doc(userId);
-        // *** FIX: Removed .orderBy() to prevent crashes from missing composite indexes. ***
         const paymentsRef = adminDb.collection('payments').where('userId', '==', userId);
 
         const [userDoc, paymentsSnapshot] = await Promise.all([
@@ -62,12 +63,13 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
             return {
                 id: doc.id,
                 amount: data.amount || 0,
-                date: paymentDate, // Keep as Date object for sorting
+                date: paymentDate,
                 notes: data.notes || '',
+                // Get the payment ID from the document data
+                razorpay_payment_id: data.razorpay_payment_id || null, 
             };
         });
 
-        // *** FIX: Sorting is now done in the code, not in the database query. ***
         const sortedPayments = unsortedPayments.sort((a, b) => b.date.getTime() - a.date.getTime());
 
         const paymentHistory: PaymentHistoryItem[] = sortedPayments.map(payment => {
@@ -76,7 +78,9 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
                 id: payment.id,
                 amount: payment.amount,
                 date: dateString,
-                notes: payment.notes || `Payment on ${dateString}`
+                notes: payment.notes || `Payment on ${dateString}`,
+                // Pass the payment ID to the final array
+                razorpay_payment_id: payment.razorpay_payment_id,
             };
         });
 
