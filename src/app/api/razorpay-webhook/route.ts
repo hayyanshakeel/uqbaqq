@@ -1,6 +1,6 @@
 import {NextRequest, NextResponse} from 'next/server';
 import crypto from 'crypto';
-import { adminDb } from '@/lib/firebase-admin';
+import { getAdminDb } from '@/lib/firebase-admin';
 import * as admin from 'firebase-admin';
 
 const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
 
         // We are only interested in successful payment link payments
         if (payload.event === 'payment_link.paid') {
+            const adminDb = getAdminDb();
             console.log("Processing payment_link.paid event.");
             const paymentEntity = payload.payload.payment.entity;
             const paymentLinkEntity = payload.payload.payment_link.entity;
