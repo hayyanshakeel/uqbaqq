@@ -1,6 +1,6 @@
 'use server';
 
-import { adminDb } from '@/lib/firebase-admin';
+import { getAdminDb } from '@/lib/firebase-admin';
 import { format } from 'date-fns';
 import Razorpay from 'razorpay';
 
@@ -19,6 +19,7 @@ export interface PaymentHistoryItem {
 
 export async function getUserDashboardData(userId: string): Promise<{user: UserDashboardData, paymentHistory: PaymentHistoryItem[]} | null> {
     if (!userId) return null;
+    const adminDb = getAdminDb();
 
     try {
         const userRef = adminDb.collection('users').doc(userId);
@@ -100,6 +101,7 @@ export async function createPaymentLink(userId: string) {
         console.error('Razorpay API keys are not configured.');
         return { success: false, message: 'Payment processing is currently unavailable.' };
     }
+    const adminDb = getAdminDb();
     
     const userDoc = await adminDb.collection('users').doc(userId).get();
     if (!userDoc.exists) {
