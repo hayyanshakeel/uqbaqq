@@ -8,12 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ArrowRight, CheckCircle, Clock, Loader2 } from "lucide-react";
+import { ArrowRight, CheckCircle, Clock, Loader2, Download } from "lucide-react"; // Import Download icon
 import { Skeleton } from '@/components/ui/skeleton';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 
-// This is the main component that contains all the logic.
 function Dashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -24,7 +23,6 @@ function Dashboard() {
   const [isPaying, setIsPaying] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
 
-  // This function fetches the latest data from the server.
   const refreshDashboardData = async (userId: string) => {
     try {
       const data = await getUserDashboardData(userId);
@@ -44,23 +42,17 @@ function Dashboard() {
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        // Initial data load when the component mounts
         await refreshDashboardData(currentUser.uid);
         setLoading(false);
 
-        // *** THE CORE FIX IS HERE ***
-        // Check if we are returning from a successful payment
         const paymentStatus = searchParams.get('razorpay_payment_link_status');
         if (paymentStatus === 'paid') {
-          setIsVerifying(true); // Show the "Verifying..." message
+          setIsVerifying(true);
           toast({ title: "Payment Successful", description: "Verifying and updating your dashboard..." });
 
-          // Wait for 3 seconds to give the webhook time to update the database
           const timer = setTimeout(() => {
-            // After the delay, fetch the fresh data again
             refreshDashboardData(currentUser.uid).then(() => {
-              setIsVerifying(false); // Hide the "Verifying..." message
-              // Clean the URL by removing the Razorpay query parameters
+              setIsVerifying(false);
               router.replace('/dashboard');
             });
           }, 3000);
@@ -73,8 +65,68 @@ function Dashboard() {
     });
 
     return () => unsubscribe();
-    // We add searchParams to the dependency array to re-run this effect when the URL changes.
   }, [router, searchParams, toast]);
+
+  // Function to generate and open the receipt
+  const handleDownloadReceipt = (payment: PaymentHistoryItem, userName: string) => {
+    const receiptContent = `
+      <html>
+        <head>
+          <title>Payment Receipt - ${payment.razorpay_payment_id || payment.id}</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 2rem; background-color: #f9fafb; color: #111827; }
+            .container { max-width: 600px; margin: auto; background: white; border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); position: relative; overflow: hidden; }
+            h1 { font-size: 1.5rem; color: #111827; margin-bottom: 0.5rem; border-bottom: 2px solid #d1d5db; padding-bottom: 0.5rem; }
+            .details { margin-top: 1.5rem; }
+            .detail-item { display: flex; justify-content: space-between; padding: 0.75rem 0; border-bottom: 1px solid #f3f4f6; }
+            .detail-item span:first-child { font-weight: 500; color: #4b5563; }
+            .detail-item span:last-child { font-weight: 600; text-align: right; }
+            .total { font-size: 1.25rem; font-weight: bold; text-align: right; margin-top: 1.5rem; }
+            .footer { text-align: center; margin-top: 2rem; font-size: 0.875rem; color: #6b7281; }
+            .paid-stamp {
+              position: absolute;
+              top: 90px;
+              right: -50px;
+              font-size: 3rem;
+              font-weight: bold;
+              color: #16a34a;
+              border: 5px solid #16a34a;
+              padding: 0.5rem 2rem;
+              transform: rotate(-30deg);
+              opacity: 0.15;
+              text-transform: uppercase;
+              z-index: 1;
+              pointer-events: none;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="paid-stamp">Paid</div>
+            <h1>Uqba Bill</h1>
+            <p class="footer">Payment Receipt</p>
+            <div class="details">
+              <div class="detail-item"><span>Payment ID</span> <span>${payment.razorpay_payment_id || payment.id}</span></div>
+              <div class="detail-item"><span>Billed To</span> <span>${userName}</span></div>
+              <div class="detail-item"><span>Payment Date</span> <span>${payment.date}</span></div>
+              <div class="detail-item"><span>Description</span> <span>${payment.notes}</span></div>
+            </div>
+            <div class="total">
+              <span>Amount Paid:</span>
+              <span>₹${payment.amount.toFixed(2)}</span>
+            </div>
+            <div class="footer">
+              Thank you for your contribution.
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+    const receiptWindow = window.open('', '_blank');
+    receiptWindow?.document.write(receiptContent);
+    receiptWindow?.document.close();
+    receiptWindow?.focus();
+  };
 
   const handlePayNow = async () => {
     if (!auth || !auth.currentUser) return;
@@ -148,11 +200,26 @@ function Dashboard() {
         <CardHeader><CardTitle>Payment History</CardTitle><p className="text-sm text-muted-foreground">A record of your payments.</p></CardHeader>
         <CardContent>
           <Table>
-            <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Description</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead></TableRow></TableHeader>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+                <TableHead className="text-right">Receipt</TableHead>
+              </TableRow>
+            </TableHeader>
             <TableBody>
-              {hasPendingPayment && (<TableRow className='bg-destructive/5'><TableCell className="font-medium">-</TableCell><TableCell>Outstanding Dues</TableCell><TableCell><Badge variant="destructive">Pending</Badge></TableCell><TableCell className="text-right font-semibold">₹{userData.pending.toFixed(2)}</TableCell></TableRow>)}
-              {paymentHistory.map((payment) => (<TableRow key={payment.id}><TableCell>{payment.date}</TableCell><TableCell className="font-medium">{payment.notes}</TableCell><TableCell><Badge variant='default' className='bg-green-600'>Paid</Badge></TableCell><TableCell className="text-right">₹{payment.amount.toFixed(2)}</TableCell></TableRow>))}
-              {!hasPendingPayment && paymentHistory.length === 0 && (<TableRow><TableCell colSpan={4} className="text-center h-24">No payment history found.</TableCell></TableRow>)}
+              {hasPendingPayment && (<TableRow className='bg-destructive/5'><TableCell className="font-medium">-</TableCell><TableCell>Outstanding Dues</TableCell><TableCell><Badge variant="destructive">Pending</Badge></TableCell><TableCell className="text-right font-semibold">₹{userData.pending.toFixed(2)}</TableCell><TableCell></TableCell></TableRow>)}
+              {paymentHistory.map((payment) => (<TableRow key={payment.id}><TableCell>{payment.date}</TableCell><TableCell className="font-medium">{payment.notes}</TableCell><TableCell><Badge variant='default' className='bg-green-600'>Paid</Badge></TableCell><TableCell className="text-right">₹{payment.amount.toFixed(2)}</TableCell>
+                <TableCell className="text-right">
+                    <Button variant="outline" size="icon" onClick={() => handleDownloadReceipt(payment, userData.name)}>
+                        <Download className="h-4 w-4" />
+                        <span className="sr-only">Download Receipt</span>
+                    </Button>
+                </TableCell>
+              </TableRow>))}
+              {!hasPendingPayment && paymentHistory.length === 0 && (<TableRow><TableCell colSpan={5} className="text-center h-24">No payment history found.</TableCell></TableRow>)}
             </TableBody>
           </Table>
         </CardContent>
@@ -162,7 +229,6 @@ function Dashboard() {
   );
 }
 
-// The main page component now uses Suspense to handle the useSearchParams hook.
 export default function UserDashboardPage() {
     return (
         <Suspense fallback={<DashboardLoadingSkeleton />}>
@@ -175,7 +241,7 @@ function DashboardLoadingSkeleton() {
     return (
         <div className="container mx-auto p-4 md:p-8 animate-pulse">
             <div className="mb-8 space-y-2"><Skeleton className="h-8 w-1/2 rounded-lg" /><Skeleton className="h-4 w-3/4 rounded-lg" /></div>
-            <div className="grid gap-4 md:grid-cols-2 mb-8"><Card><CardHeader><Skeleton className="h-5 w-1/s4 rounded-lg" /></CardHeader><CardContent><Skeleton className="h-8 w-1/2 rounded-lg" /></CardContent></Card><Card><CardHeader><Skeleton className="h-5 w-1/4 rounded-lg" /></CardHeader><CardContent><Skeleton className="h-8 w-1/2 rounded-lg" /></CardContent></Card></div>
+            <div className="grid gap-4 md:grid-cols-2 mb-8"><Card><CardHeader><Skeleton className="h-5 w-1/4 rounded-lg" /></CardHeader><CardContent><Skeleton className="h-8 w-1/2 rounded-lg" /></CardContent></Card><Card><CardHeader><Skeleton className="h-5 w-1/4 rounded-lg" /></CardHeader><CardContent><Skeleton className="h-8 w-1/2 rounded-lg" /></CardContent></Card></div>
             <Card><CardHeader><Skeleton className="h-6 w-1/3 mb-2 rounded-lg" /><Skeleton className="h-4 w-1/2 rounded-lg" /></CardHeader><CardContent><div className="space-y-2"><Skeleton className="h-10 w-full rounded-lg" /><Skeleton className="h-10 w-full rounded-lg" /><Skeleton className="h-10 w-full rounded-lg" /></div></CardContent></Card>
         </div>
     );
