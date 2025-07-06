@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { getAllExpenditures } from "@/lib/data-service";
 import ExpenditureClient from "./expenditure-client";
 
