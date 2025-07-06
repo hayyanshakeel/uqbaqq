@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { revalidatePath } from 'next/cache'; // Import revalidatePath
+import { revalidatePath } from 'next/cache';
 
 const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
@@ -80,11 +80,12 @@ export async function POST(req: NextRequest) {
                     createdAt: new Date(),
                     razorpay_payment_id: paymentId,
                     razorpay_order_id: paymentEntity.order_id,
-                    razorpay_signature: paymentEntity.signature,
+                    // *** THIS IS THE FIX ***
+                    // Use null as a fallback if the signature is undefined.
+                    razorpay_signature: paymentEntity.signature || null,
                 });
             });
 
-            // *** THIS IS THE KEY FIX FOR CACHING ***
             revalidatePath('/dashboard');
             revalidatePath(`/admin/users`);
             revalidatePath(`/admin/dashboard`);
@@ -95,7 +96,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ status: 'ok' });
 
     } catch (error: any) {
-        console.error('Error processing Razorpay webhook:', error.message);
+        console.error('Error processing Razorpay webhook:', error);
         return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
     }
 }
