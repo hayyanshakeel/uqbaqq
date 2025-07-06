@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { getDashboardKpis, getPaymentOverview, getUsersWithPendingPayments } from "@/lib/data-service";
 import DashboardClient from "./dashboard-client";
 import { DollarSign, Users, CreditCard, Activity } from "lucide-react";
