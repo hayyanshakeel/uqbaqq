@@ -10,8 +10,8 @@ const BILLING_DOC_ID = 'billing';
 // Schema for validating the input
 const BillingSettingsSchema = z.object({
   monthlyAmount: z.coerce.number().positive('Amount must be a positive number.'),
-  automaticReminders: z.preprocess((val) => val === 'on' || val === 'true', z.boolean()),
-  manualBulkPayment: z.preprocess((val) => val === 'on' || val === 'true', z.boolean()),
+  automaticReminders: z.preprocess((val) => val === 'on' || val === true, z.boolean()),
+  manualBulkPayment: z.preprocess((val) => val === 'on' || val === true, z.boolean()),
 });
 
 /**
@@ -26,10 +26,10 @@ export async function getBillingSettings(): Promise<{ monthlyAmount: number, aut
 
     if (docSnap.exists) {
       const data = docSnap.data();
-      return { 
+      return {
         monthlyAmount: data?.monthlyAmount || 250,
-        automaticReminders: data?.automaticReminders || false,
-        manualBulkPayment: data?.manualBulkPayment || false
+        automaticReminders: data?.automaticReminders === true,
+        manualBulkPayment: data?.manualBulkPayment === true
       };
     }
     // Return a default value if no setting is found in the database
@@ -58,7 +58,7 @@ export async function updateBillingSettings(formData: FormData) {
 
   if (!validatedFields.success) {
     console.error("Validation failed:", validatedFields.error.flatten().fieldErrors);
-    return { success: false, message: 'Please provide a valid positive number.' };
+    return { success: false, message: 'Please provide a valid positive number for the monthly amount.' };
   }
 
   try {
