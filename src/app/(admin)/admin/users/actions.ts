@@ -2,7 +2,7 @@
 
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
-import { differenceInMonths, parse, startOfMonth, addMonths } from 'date-fns';
+import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth } from 'date-fns';
 
 // --- Fee Structure Definition ---
 const feeStructure = [
@@ -19,9 +19,12 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
     const endDate = startOfMonth(parse(endDateStr, 'yyyy-MM-dd', new Date()));
     let totalDues = 0;
 
-    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || startDate > endDate) {
-        return 0;
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+        console.error(`Invalid date found. Start: ${startDateStr}, End: ${endDateStr}`);
+        return 0; // Return 0 if dates are invalid to avoid crashing
     }
+
+    if (startDate > endDate) return 0;
     
     const totalMonths = differenceInMonths(endDate, startDate) + 1;
 
@@ -42,23 +45,38 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
 }
 
 
-// --- CSV IMPORT ACTION ---
+// --- *** FINAL, SMARTEST CSV IMPORT ACTION V3 *** ---
 export async function importUsersFromCsvAction(csvData: string) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
-    const lines = csvData.trim().split('\n');
-    const headers = lines[0].split(',').map(h => h.trim());
-    const data = lines.slice(1);
+    const lines = csvData.trim().split(/\r?\n/);
+    
+    if (lines.length < 2) {
+        return { success: false, message: "CSV file is empty or has only a header.", errors: ["No data rows found."] };
+    }
 
+    // Trim headers and remove potential invisible characters
+    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+    
+    const requiredHeaders = ['email', 'joining_date'];
+    for (const requiredHeader of requiredHeaders) {
+        if (!headers.includes(requiredHeader)) {
+            return { success: false, message: `CSV file is missing the required header: "${requiredHeader}".`, errors: [`Header "${requiredHeader}" not found.`] };
+        }
+    }
+
+    const data = lines.slice(1);
     let successCount = 0;
     let errorCount = 0;
     const errors: string[] = [];
     const todayStr = new Date().toISOString().split('T')[0];
 
     for (const [index, row] of data.entries()) {
-        const values = row.split(',').map(v => v.trim());
+        const values = row.split(',').map(v => v.trim().replace(/"/g, ''));
         const entry = headers.reduce((obj, header, i) => {
-            obj[header] = values[i];
+            // Normalize header to match expected keys
+            const key = header.replace(/\s+/g, '_').toLowerCase();
+            obj[key] = values[i];
             return obj;
         }, {} as Record<string, string>);
 
@@ -78,7 +96,12 @@ export async function importUsersFromCsvAction(csvData: string) {
             const miscDuesNum = parseFloat(misc_dues) || 0;
             
             const totalDuesToDate = calculateDuesForPeriod(joining_date, todayStr);
-            const lastPaymentDate = last_payment_month ? `${last_payment_month}-28` : null;
+            
+            // *** FIX: Handle YYYY-MM format by converting it to the last day of that month ***
+            const lastPaymentDate = last_payment_month 
+                ? lastDayOfMonth(parse(last_payment_month, 'yyyy-MM', new Date())).toISOString().split('T')[0] 
+                : null;
+                
             const totalPaid = lastPaymentDate ? calculateDuesForPeriod(joining_date, lastPaymentDate) : 0;
             
             const pending = (totalDuesToDate + admissionFeeNum + miscDuesNum) - totalPaid;
@@ -178,7 +201,7 @@ export async function updateUserAction(userId: string, formData: FormData) {
 }
 
 
-// --- Existing User Actions ---
+// --- Existing User Actions (Unchanged) ---
 export async function addUserAction(formData: FormData) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
@@ -345,7 +368,7 @@ export async function addMissedBillAction(formData: FormData) {
         revalidatePath('/admin/dashboard');
         revalidatePath(`/dashboard`);
         return { success: true, message: `Missed bill of ₹${amount.toFixed(2)} added.` };
-    } catch (error: any) {
+    } catch (error) {
         console.error('Error adding missed bill:', error);
         const message = error instanceof Error ? error.message : 'Failed to add missed bill.';
         return { success: false, message };
