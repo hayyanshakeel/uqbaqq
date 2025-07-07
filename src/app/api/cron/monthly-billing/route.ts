@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
+import { getBillingSettings } from '@/app/(admin)/admin/settings/actions';
+import { createPaymentLink } from '@/app/(user)/dashboard/actions';
+
 
 export async function GET(request: NextRequest) {
-  // 1. Secure the endpoint with a Cron Secret
   const authHeader = request.headers.get('authorization');
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return new Response('Unauthorized', { status: 401 });
@@ -11,58 +13,75 @@ export async function GET(request: NextRequest) {
 
   try {
     const adminDb = getAdminDb();
-    console.log("Cron Job: Starting monthly billing process...");
+    const settings = await getBillingSettings();
 
-    // 2. Get the current monthly billing amount from settings
+    // 1. Handle Automatic Billing
+    console.log("Cron Job: Starting monthly billing process...");
     const settingsRef = adminDb.collection('app_settings').doc('billing');
     const settingsDoc = await settingsRef.get();
-    const monthlyAmount = settingsDoc.data()?.monthlyAmount || 250; // Default to 250 if not set
+    const monthlyAmount = settingsDoc.data()?.monthlyAmount || 250;
 
-    // 3. Get all active users (not deceased)
     const usersSnapshot = await adminDb.collection('users').where('status', '!=', 'deceased').get();
 
-    if (usersSnapshot.empty) {
-      console.log("Cron Job: No active users found. Exiting.");
-      return NextResponse.json({ success: true, message: 'No active users to bill.' });
+    if (!usersSnapshot.empty) {
+        let billSuccessCount = 0;
+        const batch = adminDb.batch();
+
+        usersSnapshot.forEach(userDoc => {
+          const userData = userDoc.data();
+          const newPending = (userData.pending || 0) + monthlyAmount;
+          
+          const userRef = adminDb.collection('users').doc(userDoc.id);
+          batch.update(userRef, { 
+            pending: newPending,
+            status: 'pending'
+          });
+
+          const billRef = adminDb.collection('bills').doc();
+          batch.set(billRef, {
+              userId: userDoc.id,
+              amount: monthlyAmount,
+              dueDate: new Date(),
+              notes: `Automatic monthly bill for ${new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}`,
+              status: 'pending',
+              createdAt: new Date()
+          });
+
+          billSuccessCount++;
+        });
+
+        await batch.commit();
+        console.log(`Cron Job: Successfully created bills for ${billSuccessCount} users.`);
+    } else {
+        console.log("Cron Job: No active users found to create bills for.");
     }
 
-    let successCount = 0;
-    const batch = adminDb.batch();
-
-    // 4. Loop through each user and update their balance
-    usersSnapshot.forEach(userDoc => {
-      const userData = userDoc.data();
-      const newPending = (userData.pending || 0) + monthlyAmount;
-      
-      const userRef = adminDb.collection('users').doc(userDoc.id);
-      batch.update(userRef, { 
-        pending: newPending,
-        status: 'pending' // Set their status to pending
-      });
-
-      // Create a record of the bill
-      const billRef = adminDb.collection('bills').doc();
-      batch.set(billRef, {
-          userId: userDoc.id,
-          amount: monthlyAmount,
-          dueDate: new Date(),
-          notes: `Automatic monthly bill for ${new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}`,
-          status: 'pending',
-          createdAt: new Date()
-      });
-
-      successCount++;
-    });
-
-    // 5. Commit all the updates at once
-    await batch.commit();
+    // 2. Handle Automatic Payment Reminders
+    if (settings.automaticReminders) {
+        console.log("Cron Job: Sending automatic payment reminders...");
+        const pendingUsersSnapshot = await adminDb.collection('users').where('pending', '>', 0).where('status', '!=', 'deceased').get();
+        if (pendingUsersSnapshot.empty) {
+            console.log("Cron Job: No users with pending payments to remind.");
+        } else {
+            let reminderSuccessCount = 0;
+            for (const userDoc of pendingUsersSnapshot.docs) {
+                try {
+                    await createPaymentLink(userDoc.id);
+                    reminderSuccessCount++;
+                } catch (linkError) {
+                    console.error(`Cron Job: Failed to create payment link for user ${userDoc.id}`, linkError);
+                }
+            }
+            console.log(`Cron Job: Successfully sent payment reminders to ${reminderSuccessCount} users.`);
+        }
+    } else {
+        console.log("Cron Job: Automatic payment reminders are disabled.");
+    }
     
-    // 6. Revalidate paths to ensure data is fresh
     revalidatePath('/admin/users');
     revalidatePath('/admin/dashboard');
 
-    console.log(`Cron Job: Successfully billed ${successCount} users.`);
-    return NextResponse.json({ success: true, message: `Successfully billed ${successCount} users.` });
+    return NextResponse.json({ success: true, message: 'Cron job completed.' });
 
   } catch (error: any) {
     console.error("Cron Job Error:", error);
