@@ -15,7 +15,6 @@ const feeStructure = [
 
 // --- Helper function to calculate dues for a given period ---
 function calculateDuesForPeriod(startDateStr: string, endDateStr: string): number {
-    // Use a specific format for parsing to avoid ambiguity
     const startDate = startOfMonth(parse(startDateStr, 'yyyy-MM-dd', new Date()));
     const endDate = startOfMonth(parse(endDateStr, 'yyyy-MM-dd', new Date()));
     let totalDues = 0;
@@ -54,7 +53,7 @@ export async function importUsersFromCsvAction(csvData: string) {
     let successCount = 0;
     let errorCount = 0;
     const errors: string[] = [];
-    const todayStr = new Date().toISOString().split('T')[0]; // yyyy-MM-dd format
+    const todayStr = new Date().toISOString().split('T')[0];
 
     for (const [index, row] of data.entries()) {
         const values = row.split(',').map(v => v.trim());
@@ -78,11 +77,8 @@ export async function importUsersFromCsvAction(csvData: string) {
             const admissionFeeNum = parseFloat(admission_fee) || 0;
             const miscDuesNum = parseFloat(misc_dues) || 0;
             
-            // Calculate total amount they should have paid from joining until today
             const totalDuesToDate = calculateDuesForPeriod(joining_date, todayStr);
-
-            // Calculate amount they have actually paid based on the last_payment_month
-            const lastPaymentDate = last_payment_month ? `${last_payment_month}-28` : null; // Use end of month
+            const lastPaymentDate = last_payment_month ? `${last_payment_month}-28` : null;
             const totalPaid = lastPaymentDate ? calculateDuesForPeriod(joining_date, lastPaymentDate) : 0;
             
             const pending = (totalDuesToDate + admissionFeeNum + miscDuesNum) - totalPaid;
@@ -145,7 +141,7 @@ export async function updateUserAction(userId: string, formData: FormData) {
     const name = formData.get('name') as string;
     const email = formData.get('email') as string;
     const phone = formData.get('phone') as string;
-    const password = formData.get('password') as string; // Get the new password
+    const password = formData.get('password') as string;
 
     if (!name || !email || !phone) {
         return { success: false, message: 'Name, email, and phone are required.' };
@@ -154,14 +150,12 @@ export async function updateUserAction(userId: string, formData: FormData) {
     try {
         const firestoreUpdatePayload = { name, email, phone };
         
-        // Prepare the payload for Firebase Auth update
         const authUpdatePayload: { displayName: string; email: string; phoneNumber: string; password?: string } = { 
             displayName: name, 
             email, 
             phoneNumber: phone 
         };
         
-        // Only add the password to the payload if a new one was provided
         if (password) {
             if (password.length < 6) {
                 return { success: false, message: 'New password must be at least 6 characters long.' };
@@ -169,10 +163,7 @@ export async function updateUserAction(userId: string, formData: FormData) {
             authUpdatePayload.password = password;
         }
 
-        // Update Firebase Authentication
         await adminAuth.updateUser(userId, authUpdatePayload);
-
-        // Update Firestore Database
         await adminDb.collection('users').doc(userId).update(firestoreUpdatePayload);
 
         revalidatePath('/admin/users');
@@ -187,7 +178,7 @@ export async function updateUserAction(userId: string, formData: FormData) {
 }
 
 
-// --- Existing User Actions (Unchanged) ---
+// --- Existing User Actions ---
 export async function addUserAction(formData: FormData) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
@@ -354,7 +345,7 @@ export async function addMissedBillAction(formData: FormData) {
         revalidatePath('/admin/dashboard');
         revalidatePath(`/dashboard`);
         return { success: true, message: `Missed bill of ₹${amount.toFixed(2)} added.` };
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error adding missed bill:', error);
         const message = error instanceof Error ? error.message : 'Failed to add missed bill.';
         return { success: false, message };
