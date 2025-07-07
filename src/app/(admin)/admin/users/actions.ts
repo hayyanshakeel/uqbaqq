@@ -20,8 +20,7 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
     let totalDues = 0;
 
     if (!isValid(startDate) || !isValid(endDate)) {
-        console.error(`Invalid date found. Start: ${startDateStr}, End: ${endDateStr}`);
-        return 0;
+        throw new Error(`Invalid date format encountered. Start: "${startDateStr}", End: "${endDateStr}"`);
     }
 
     if (startDate > endDate) return 0;
@@ -44,99 +43,103 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
     return totalDues;
 }
 
+// --- Server Action to Bulk Record Past Payments ---
+export async function recordBulkPaymentAction(userId: string, formData: FormData) {
+    const fromMonth = formData.get('fromMonth') as string;
+    const toMonth = formData.get('toMonth') as string;
 
-// --- SIMPLIFIED CSV IMPORT ACTION ---
-export async function importUsersFromCsvAction(csvData: string) {
-    const adminDb = getAdminDb();
-    const adminAuth = getAdminAuth();
-    const lines = csvData.trim().split(/\r?\n/);
-    
-    if (lines.length < 2) {
-        return { success: false, message: "CSV file is empty or has only a header.", errors: ["No data rows found."] };
+    if (!userId || !fromMonth || !toMonth) {
+        return { success: false, message: 'User ID, From Month, and To Month are required.' };
     }
 
-    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-    
-    const data = lines.slice(1);
+    try {
+        const adminDb = getAdminDb();
+        const userRef = adminDb.collection('users').doc(userId);
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) {
+            throw new Error("User not found.");
+        }
+        const userData = userDoc.data()!;
+        const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        const fromDate = `${fromMonth}-01`;
+        const toDate = lastDayOfMonth(parse(toMonth, 'yyyy-MM', new Date())).toISOString().split('T')[0];
+
+        const totalPaidForRange = calculateDuesForPeriod(fromDate, toDate);
+        const totalDuesToDate = calculateDuesForPeriod(joiningDate, todayStr);
+        const pending = totalDuesToDate - totalPaidForRange;
+
+        await userRef.update({
+            totalPaid: totalPaidForRange,
+            pending: pending < 0 ? 0 : pending,
+            status: pending <= 0 ? 'paid' : 'pending',
+        });
+
+        const paymentRef = adminDb.collection('payments').doc();
+        await paymentRef.set({
+            userId,
+            amount: totalPaidForRange,
+            date: new Date(),
+            notes: `Bulk payment recorded for period ${fromMonth} to ${toMonth}.`,
+            type: 'manual_bulk_record',
+            createdAt: new Date()
+        });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+        revalidatePath(`/dashboard?userId=${userId}`);
+
+        return { success: true, message: `Successfully recorded payments from ${fromMonth} to ${toMonth}.` };
+    } catch (error: any) {
+        console.error("Error in bulk record action:", error);
+        return { success: false, message: error.message };
+    }
+}
+
+// --- *** NEW: Server Action to Bulk Add Users *** ---
+export async function bulkAddUsersAction(userData: string) {
+    const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
+    const lines = userData.trim().split(/\r?\n/);
+
     let successCount = 0;
     let errorCount = 0;
     const errors: string[] = [];
-    const todayStr = new Date().toISOString().split('T')[0];
 
-    for (const [index, row] of data.entries()) {
-        const values = row.split(',').map(v => v.trim().replace(/"/g, ''));
-        const entry = headers.reduce((obj, header, i) => {
-            const key = header.replace(/\s+/g, '_').toLowerCase();
-            obj[key] = values[i];
-            return obj;
-        }, {} as Record<string, string>);
+    for (const [index, line] of lines.entries()) {
+        if (!line.trim()) continue;
+        const [name, email, phone, password, joiningDate] = line.split(',').map(v => v.trim());
 
-        const { name, email, phone, password, joining_date, last_payment_month } = entry;
-
-        if (!email || !joining_date) {
-            errors.push(`Row ${index + 2}: Missing required fields (email, joining_date).`);
+        if (!name || !email || !phone || !password || !joiningDate) {
+            errors.push(`Line ${index + 1}: Missing required fields. Expected: name, email, phone, password, joining_date`);
             errorCount++;
             continue;
         }
 
         try {
-            const usersRef = adminDb.collection('users');
-            const querySnapshot = await usersRef.where('email', '==', email).limit(1).get();
-            
-            const totalDuesToDate = calculateDuesForPeriod(joining_date, todayStr);
-            
-            let totalPaid = 0;
-            if (typeof last_payment_month === 'string' && last_payment_month.trim() !== '') {
-                const firstDayOfPaidMonthStr = `${last_payment_month.trim()}-01`;
-                const firstDayOfPaidMonth = parse(firstDayOfPaidMonthStr, 'yyyy-MM-dd', new Date());
-
-                if (isValid(firstDayOfPaidMonth)) {
-                    const lastDayOfPaidMonth = lastDayOfMonth(firstDayOfPaidMonth);
-                    const lastPaymentDateStr = lastDayOfPaidMonth.toISOString().split('T')[0];
-                    totalPaid = calculateDuesForPeriod(joining_date, lastPaymentDateStr);
-                } else {
-                    throw new Error(`Could not parse last_payment_month: "${last_payment_month}".`);
-                }
+            if (password.length < 6) {
+                throw new Error("Password must be at least 6 characters.");
             }
             
-            const pending = totalDuesToDate - totalPaid;
+            const userRecord = await adminAuth.createUser({ email, password, displayName: name, phoneNumber: phone });
+            
+            const todayStr = new Date().toISOString().split('T')[0];
+            const totalDues = calculateDuesForPeriod(joiningDate, todayStr);
 
-            if (querySnapshot.empty) {
-                if (!name || !phone || !password) {
-                    errors.push(`Row ${index + 2}: New user requires name, phone, and password.`);
-                    errorCount++;
-                    continue;
-                }
-                if (password.length < 6) {
-                     errors.push(`Row ${index + 2}: Password for new user ${name} must be at least 6 characters.`);
-                     errorCount++;
-                     continue;
-                }
-
-                const userRecord = await adminAuth.createUser({ email, password, displayName: name, phoneNumber: phone });
-
-                await usersRef.doc(userRecord.uid).set({
-                    name, phone, email, totalPaid,
-                    pending: pending < 0 ? 0 : pending,
-                    status: pending <= 0 ? 'paid' : 'pending',
-                    joined: new Date(joining_date).toISOString(),
-                });
-
-            } else {
-                const userDoc = querySnapshot.docs[0];
-                await userDoc.ref.update({
-                    totalPaid,
-                    pending: pending < 0 ? 0 : pending,
-                    status: pending <= 0 ? 'paid' : 'pending',
-                    joined: new Date(joining_date).toISOString(),
-                    name: name || userDoc.data().name,
-                    phone: phone || userDoc.data().phone,
-                });
-            }
-
+            await adminDb.collection('users').doc(userRecord.uid).set({
+                name,
+                phone,
+                email,
+                status: 'pending',
+                joined: new Date(joiningDate).toISOString(),
+                totalPaid: 0,
+                pending: totalDues,
+            });
             successCount++;
         } catch (error: any) {
-            errors.push(`Row ${index + 2} (${email}): ${error.message}`);
+            errors.push(`Line ${index + 1} (${email}): ${error.message}`);
             errorCount++;
         }
     }
@@ -146,10 +149,11 @@ export async function importUsersFromCsvAction(csvData: string) {
 
     return {
         success: errorCount === 0,
-        message: `Import complete. ${successCount} users processed. ${errorCount} rows failed.`,
+        message: `Bulk add complete. ${successCount} users added. ${errorCount} rows failed.`,
         errors
     };
 }
+
 
 // --- Server Action to Update User Details and Password ---
 export async function updateUserAction(userId: string, formData: FormData) {
@@ -167,7 +171,6 @@ export async function updateUserAction(userId: string, formData: FormData) {
 
     try {
         const firestoreUpdatePayload = { name, email, phone };
-        
         const authUpdatePayload: { displayName: string; email: string; phoneNumber: string; password?: string } = { 
             displayName: name, 
             email, 
@@ -204,8 +207,9 @@ export async function addUserAction(formData: FormData) {
     const phone = formData.get('phone') as string;
     const email = formData.get('email') as string;
     const password = formData.get('password') as string;
+    const joiningDate = formData.get('joining_date') as string;
 
-    if (!name || !phone || !email || !password) {
+    if (!name || !phone || !email || !password || !joiningDate) {
         return { success: false, message: 'All fields are required.' };
     }
 
@@ -219,15 +223,18 @@ export async function addUserAction(formData: FormData) {
             password,
             displayName: name,
         });
+        
+        const todayStr = new Date().toISOString().split('T')[0];
+        const totalDues = calculateDuesForPeriod(joiningDate, todayStr);
 
         await adminDb.collection('users').doc(userRecord.uid).set({
             name,
             phone,
             email,
             status: 'pending',
-            joined: new Date().toISOString(),
+            joined: new Date(joiningDate).toISOString(),
             totalPaid: 0,
-            pending: 250,
+            pending: totalDues,
         });
         
         revalidatePath('/admin/users');
