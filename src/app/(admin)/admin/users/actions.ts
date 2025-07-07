@@ -2,6 +2,111 @@
 
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
+import { differenceInMonths, parseISO, startOfMonth } from 'date-fns';
+
+// --- Fee Structure Definition ---
+const feeStructure = [
+    { start: '2001-05-01', end: '2007-04-30', fee: 30 },
+    { start: '2007-05-01', end: '2014-04-30', fee: 50 },
+    { start: '2014-05-01', end: '2019-06-30', fee: 100 },
+    { start: '2019-07-01', end: '2024-03-31', fee: 200 },
+    { start: '2024-04-01', end: '9999-12-31', fee: 250 } // Future-proof end date
+];
+
+// --- Helper Function to Calculate Total Dues ---
+function calculateTotalDues(joiningDateStr: string): number {
+    const joiningDate = startOfMonth(parseISO(joiningDateStr));
+    const currentDate = startOfMonth(new Date());
+    let totalDues = 0;
+
+    if (joiningDate > currentDate) return 0;
+
+    const totalMonths = differenceInMonths(currentDate, joiningDate) + 1;
+
+    for (let i = 0; i < totalMonths; i++) {
+        const monthDate = new Date(joiningDate.getFullYear(), joiningDate.getMonth() + i, 1);
+        
+        const applicableTier = feeStructure.find(tier => {
+            const startDate = parseISO(tier.start);
+            const endDate = parseISO(tier.end);
+            return monthDate >= startDate && monthDate <= endDate;
+        });
+
+        if (applicableTier) {
+            totalDues += applicableTier.fee;
+        }
+    }
+    return totalDues;
+}
+
+
+// --- New Server Action for CSV Import ---
+export async function importUsersFromCsvAction(csvData: string) {
+    const adminDb = getAdminDb();
+    const lines = csvData.trim().split('\n');
+    const headers = lines[0].split(',').map(h => h.trim());
+    const data = lines.slice(1);
+
+    let successCount = 0;
+    let errorCount = 0;
+    const errors: string[] = [];
+
+    for (const [index, row] of data.entries()) {
+        const values = row.split(',').map(v => v.trim());
+        const entry = headers.reduce((obj, header, i) => {
+            obj[header] = values[i];
+            return obj;
+        }, {} as Record<string, string>);
+
+        const { email, joining_date, total_paid_manual } = entry;
+
+        if (!email || !joining_date || !total_paid_manual) {
+            errors.push(`Row ${index + 2}: Missing required fields.`);
+            errorCount++;
+            continue;
+        }
+
+        try {
+            const usersRef = adminDb.collection('users');
+            const querySnapshot = await usersRef.where('email', '==', email).limit(1).get();
+
+            if (querySnapshot.empty) {
+                errors.push(`Row ${index + 2}: User with email ${email} not found.`);
+                errorCount++;
+                continue;
+            }
+
+            const userDoc = querySnapshot.docs[0];
+            const totalDues = calculateTotalDues(joining_date);
+            const totalPaid = parseFloat(total_paid_manual);
+            const pending = totalDues - totalPaid;
+
+            await userDoc.ref.update({
+                totalPaid: totalPaid,
+                pending: pending < 0 ? 0 : pending,
+                status: pending <= 0 ? 'paid' : 'pending',
+                joined: new Date(joining_date).toISOString() // Also update joined date
+            });
+
+            successCount++;
+        } catch (error: any) {
+            errors.push(`Row ${index + 2} (${email}): ${error.message}`);
+            errorCount++;
+        }
+    }
+
+    revalidatePath('/admin/users');
+    revalidatePath('/admin/dashboard');
+
+    return {
+        success: errorCount === 0,
+        message: `Import complete. ${successCount} users updated. ${errorCount} rows failed.`,
+        errors
+    };
+}
+
+
+// --- Existing User Actions (Unchanged) ---
 
 export async function addUserAction(formData: FormData) {
     const adminDb = getAdminDb();
@@ -181,7 +286,6 @@ export async function reverseLastPaymentAction(userId: string) {
     if (!userId) return { success: false, message: 'User ID is required.' };
 
     try {
-        // *** FIX: Removed orderBy to prevent index error. We will sort in the code. ***
         const paymentQuery = adminDb.collection('payments').where('userId', '==', userId);
         const paymentSnapshot = await paymentQuery.get();
 
@@ -189,7 +293,6 @@ export async function reverseLastPaymentAction(userId: string) {
             return { success: false, message: 'No recorded payments found for this user to reverse.' };
         }
         
-        // *** FIX: Find the most recent payment by sorting the results here. ***
         const lastPaymentDoc = paymentSnapshot.docs.sort((a, b) => b.data().createdAt.toMillis() - a.data().createdAt.toMillis())[0];
         
         const lastPaymentData = lastPaymentDoc.data();
@@ -231,7 +334,6 @@ export async function reverseLastBillAction(userId: string) {
     if (!userId) return { success: false, message: 'User ID is required.' };
 
     try {
-        // *** FIX: Removed orderBy to prevent index error. ***
         const billQuery = adminDb.collection('bills').where('userId', '==', userId);
         const billSnapshot = await billQuery.get();
 
@@ -239,7 +341,6 @@ export async function reverseLastBillAction(userId: string) {
             return { success: false, message: 'No recorded bills found for this user to reverse.' };
         }
 
-        // *** FIX: Find the most recent bill by sorting the results here. ***
         const lastBillDoc = billSnapshot.docs.sort((a, b) => b.data().createdAt.toMillis() - a.data().createdAt.toMillis())[0];
         const lastBillData = lastBillDoc.data();
         const amount = lastBillData.amount;
