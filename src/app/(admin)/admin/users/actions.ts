@@ -3,7 +3,7 @@
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
 import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid } from 'date-fns';
-import { getBillingSettings } from '../../settings/actions';
+import { getBillingSettings } from '../settings/actions';
 import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 
 // --- Fee Structure Definition ---
