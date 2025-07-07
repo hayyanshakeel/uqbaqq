@@ -45,7 +45,7 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
 }
 
 
-// --- *** SIMPLIFIED CSV IMPORT ACTION *** ---
+// --- SIMPLIFIED CSV IMPORT ACTION ---
 export async function importUsersFromCsvAction(csvData: string) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
