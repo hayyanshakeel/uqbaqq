@@ -21,7 +21,7 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
 
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
         console.error(`Invalid date found. Start: ${startDateStr}, End: ${endDateStr}`);
-        return 0; // Return 0 if dates are invalid to avoid crashing
+        return 0;
     }
 
     if (startDate > endDate) return 0;
@@ -55,12 +55,11 @@ export async function importUsersFromCsvAction(csvData: string) {
         return { success: false, message: "CSV file is empty or has only a header.", errors: ["No data rows found."] };
     }
 
-    // Trim headers and remove potential invisible characters
     const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
     
     const requiredHeaders = ['email', 'joining_date'];
     for (const requiredHeader of requiredHeaders) {
-        if (!headers.includes(requiredHeader)) {
+        if (!headers.includes(requiredHeader) && !headers.includes(requiredHeader.replace(/_/g, ' '))) {
             return { success: false, message: `CSV file is missing the required header: "${requiredHeader}".`, errors: [`Header "${requiredHeader}" not found.`] };
         }
     }
@@ -74,7 +73,6 @@ export async function importUsersFromCsvAction(csvData: string) {
     for (const [index, row] of data.entries()) {
         const values = row.split(',').map(v => v.trim().replace(/"/g, ''));
         const entry = headers.reduce((obj, header, i) => {
-            // Normalize header to match expected keys
             const key = header.replace(/\s+/g, '_').toLowerCase();
             obj[key] = values[i];
             return obj;
@@ -97,8 +95,9 @@ export async function importUsersFromCsvAction(csvData: string) {
             
             const totalDuesToDate = calculateDuesForPeriod(joining_date, todayStr);
             
-            // *** FIX: Handle YYYY-MM format by converting it to the last day of that month ***
-            const lastPaymentDate = last_payment_month 
+            // *** THE FINAL FIX ***
+            // Explicitly check for a non-empty string before parsing the date.
+            const lastPaymentDate = (last_payment_month && last_payment_month.trim() !== '')
                 ? lastDayOfMonth(parse(last_payment_month, 'yyyy-MM', new Date())).toISOString().split('T')[0] 
                 : null;
                 
@@ -317,7 +316,7 @@ export async function recordPaymentAction(formData: FormData) {
         revalidatePath('/admin/dashboard');
         revalidatePath(`/dashboard`);
         return { success: true, message: `Payment of ₹${amount.toFixed(2)} recorded.` };
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error recording payment:', error);
         const message = error instanceof Error ? error.message : 'Failed to record payment.';
         return { success: false, message };
@@ -368,7 +367,7 @@ export async function addMissedBillAction(formData: FormData) {
         revalidatePath('/admin/dashboard');
         revalidatePath(`/dashboard`);
         return { success: true, message: `Missed bill of ₹${amount.toFixed(2)} added.` };
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error adding missed bill:', error);
         const message = error instanceof Error ? error.message : 'Failed to add missed bill.';
         return { success: false, message };
@@ -416,7 +415,7 @@ export async function reverseLastPaymentAction(userId: string) {
         revalidatePath(`/dashboard`);
         return { success: true, message: `Successfully reversed the last payment of ₹${amount.toFixed(2)}.` };
 
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error reversing payment:', error);
         const message = error instanceof Error ? error.message : 'Failed to reverse payment.';
         return { success: false, message };
@@ -461,7 +460,7 @@ export async function reverseLastBillAction(userId: string) {
         revalidatePath(`/dashboard`);
         return { success: true, message: `Successfully reversed the last bill of ₹${amount.toFixed(2)}.` };
 
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error reversing bill:', error);
         const message = error instanceof Error ? error.message : 'Failed to reverse bill.';
         return { success: false, message };
