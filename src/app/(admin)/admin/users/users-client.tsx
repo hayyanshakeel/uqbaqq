@@ -7,12 +7,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History } from "lucide-react";
+import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, HeartCrack } from "lucide-react";
 import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import type { User } from '@/lib/data-service';
-import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, updateUserAction, recordBulkPaymentAction } from './actions';
+import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, updateUserAction, recordBulkPaymentAction, markAsDeceasedAction } from './actions';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
@@ -28,6 +28,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
     const [isBulkRecordOpen, setIsBulkRecordOpen] = useState(false);
     const [isAddMissedBillOpen, setIsAddMissedBillOpen] = useState(false);
+    const [isMarkAsDeceasedOpen, setIsMarkAsDeceasedOpen] = useState(false);
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{ action: () => void, title: string, description: string } | null>(null);
 
@@ -39,6 +40,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const recordPaymentFormRef = useRef<HTMLFormElement>(null);
     const bulkRecordFormRef = useRef<HTMLFormElement>(null);
     const addMissedBillFormRef = useRef<HTMLFormElement>(null);
+    const deceasedFormRef = useRef<HTMLFormElement>(null);
 
     const handleAddUser = async (formData: FormData) => {
         startTransition(async () => {
@@ -73,6 +75,19 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
             if (result.success) {
                 toast({ title: "Bulk Record Successful", description: result.message });
                 setIsBulkRecordOpen(false);
+            } else {
+                toast({ variant: "destructive", title: "Error", description: result.message });
+            }
+        });
+    };
+
+    const handleMarkAsDeceased = async (formData: FormData) => {
+        if (!selectedUser) return;
+        startTransition(async () => {
+            const result = await markAsDeceasedAction(selectedUser.id, formData);
+            if (result.success) {
+                toast({ title: "User Status Updated", description: result.message });
+                setIsMarkAsDeceasedOpen(false);
             } else {
                 toast({ variant: "destructive", title: "Error", description: result.message });
             }
@@ -214,6 +229,11 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setIsAddMissedBillOpen(true);
     };
 
+    const openMarkAsDeceasedDialog = (user: User) => {
+        setSelectedUser(user);
+        setIsMarkAsDeceasedOpen(true);
+    };
+
     const UserActionsDropdown = ({ user }: { user: User }) => (
         <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -247,6 +267,10 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 <DropdownMenuItem onSelect={() => handleReverseBill(user.id)} className="text-destructive focus:text-destructive">
                     <Undo2 className="mr-2 h-4 w-4" />
                     <span>Reverse Last Bill</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openMarkAsDeceasedDialog(user)} className="text-destructive focus:text-destructive">
+                    <HeartCrack className="mr-2 h-4 w-4" />
+                    <span>Mark as Deceased</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => confirmDeleteUser(user)} className="text-destructive focus:text-destructive">
                     <Trash2 className="mr-2 h-4 w-4" />
@@ -342,7 +366,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                             <TableCell className="font-medium">{user.name}</TableCell>
                                             <TableCell>{user.email}</TableCell>
                                             <TableCell>
-                                                <Badge variant={user.status === 'paid' ? 'default' : user.status === 'pending' ? 'secondary' : 'destructive'}>
+                                                <Badge variant={user.status === 'paid' ? 'default' : user.status === 'deceased' ? 'destructive' : 'secondary'}>
                                                     {user.status}
                                                 </Badge>
                                             </TableCell>
@@ -378,7 +402,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                     <CardContent className="p-4 pt-0 space-y-2">
                                         <div className="flex justify-between items-center text-sm">
                                             <span className="text-muted-foreground">Status</span>
-                                            <Badge variant={user.status === 'paid' ? 'default' : user.status === 'pending' ? 'secondary' : 'destructive'}>
+                                            <Badge variant={user.status === 'paid' ? 'default' : user.status === 'deceased' ? 'destructive' : 'secondary'}>
                                                 {user.status}
                                             </Badge>
                                         </div>
@@ -505,6 +529,31 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                             <Button type="submit" disabled={isPending}>
                                 {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                 Calculate & Save
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+            
+            <Dialog open={isMarkAsDeceasedOpen} onOpenChange={setIsMarkAsDeceasedOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Mark {selectedUser?.name} as Deceased</DialogTitle>
+                        <DialogDescription>
+                            This will finalize the user's balance based on the date of death and make their account inactive. This action cannot be easily undone.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form ref={deceasedFormRef} action={handleMarkAsDeceased}>
+                        <div className="grid gap-4 py-4">
+                            <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="dateOfDeath" className="text-right">Date of Death</Label>
+                                <Input id="dateOfDeath" name="dateOfDeath" type="date" className="col-span-3" required />
+                            </div>
+                        </div>
+                        <DialogFooter>
+                            <Button type="submit" variant="destructive" disabled={isPending}>
+                                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                Confirm & Finalize Balance
                             </Button>
                         </DialogFooter>
                     </form>
