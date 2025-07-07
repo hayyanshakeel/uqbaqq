@@ -7,12 +7,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, HeartCrack } from "lucide-react";
+import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, HeartCrack, Send } from "lucide-react";
 import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import type { User } from '@/lib/data-service';
-import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, updateUserAction, recordBulkPaymentAction, markAsDeceasedAction } from './actions';
+import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, updateUserAction, recordBulkPaymentAction, markAsDeceasedAction, sendPaymentLinkAction } from './actions';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
@@ -168,6 +168,17 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setIsConfirmOpen(true);
     };
 
+    const handleSendPaymentLink = (userId: string) => {
+        startTransition(async () => {
+            const result = await sendPaymentLinkAction(userId);
+            if (result.success) {
+                toast({ title: "Action Successful", description: result.message });
+            } else {
+                toast({ variant: "destructive", title: "Error", description: result.message });
+            }
+        });
+    };
+
     const handleSearch = (event: React.ChangeEvent<HTMLInputElement>) => {
         const searchTerm = event.target.value.toLowerCase();
         const newFilteredUsers = initialUsers.filter(user => 
@@ -243,6 +254,10 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => handleSendPaymentLink(user.id)}>
+                    <Send className="mr-2 h-4 w-4" />
+                    <span>Send Payment Link</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openEditUserDialog(user)}>
                     <Edit className="mr-2 h-4 w-4" />
                     <span>Edit User</span>
