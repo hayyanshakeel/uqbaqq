@@ -3,6 +3,8 @@
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
 import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid } from 'date-fns';
+import { getBillingSettings } from '../../settings/actions';
+import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 
 // --- Fee Structure Definition ---
 const feeStructure = [
@@ -42,7 +44,28 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
     }
     return totalDues;
 }
+export async function sendPaymentLinkAction(userId: string) {
+    if (!userId) {
+        return { success: false, message: 'User ID is required.' };
+    }
 
+    const settings = await getBillingSettings();
+    if (!settings.manualBulkPayment) {
+        return { success: false, message: 'This feature is disabled in the settings.' };
+    }
+
+    try {
+        const result = await createPaymentLink(userId);
+        if (result.success) {
+            return { success: true, message: `Payment link sent successfully.` };
+        } else {
+            return { success: false, message: result.message || 'Failed to send payment link.' };
+        }
+    } catch (error: any) {
+        console.error("Error sending payment link:", error);
+        return { success: false, message: error.message };
+    }
+}
 // --- *** NEW: Server Action to Mark a User as Deceased *** ---
 export async function markAsDeceasedAction(userId: string, formData: FormData) {
     const dateOfDeathStr = formData.get('dateOfDeath') as string;
