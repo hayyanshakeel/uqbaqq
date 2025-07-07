@@ -7,12 +7,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, Users } from "lucide-react";
+import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History } from "lucide-react";
 import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import type { User } from '@/lib/data-service';
-import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, updateUserAction, recordBulkPaymentAction, bulkAddUsersAction } from './actions';
+import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, updateUserAction, recordBulkPaymentAction } from './actions';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
@@ -23,8 +23,6 @@ type UsersClientProps = {
 export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [filteredUsers, setFilteredUsers] = useState(initialUsers);
     const [isAddUserOpen, setIsAddUserOpen] = useState(false);
-    const [isBulkAddOpen, setIsBulkAddOpen] = useState(false);
-    const [bulkAddData, setBulkAddData] = useState('');
     const [isEditUserOpen, setIsEditUserOpen] = useState(false);
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
@@ -41,24 +39,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const recordPaymentFormRef = useRef<HTMLFormElement>(null);
     const bulkRecordFormRef = useRef<HTMLFormElement>(null);
     const addMissedBillFormRef = useRef<HTMLFormElement>(null);
-
-    const handleBulkAdd = () => {
-        if (!bulkAddData.trim()) {
-            toast({ variant: "destructive", title: "No Data", description: "Please paste user data into the text box." });
-            return;
-        }
-        startTransition(async () => {
-            const result = await bulkAddUsersAction(bulkAddData);
-            if (result.success) {
-                toast({ title: "Bulk Add Successful", description: result.message });
-            } else {
-                toast({ variant: "destructive", title: "Bulk Add Failed", description: `${result.message} Check console for details.` });
-                console.error("Bulk Add Errors:", result.errors);
-            }
-            setIsBulkAddOpen(false);
-            setBulkAddData('');
-        });
-    };
 
     const handleAddUser = async (formData: FormData) => {
         startTransition(async () => {
@@ -286,39 +266,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     </div>
                     <div className="flex items-center space-x-2 flex-wrap gap-2">
                         <Button variant="outline" onClick={handleExportData}><Download className="mr-2 h-4 w-4" /> Export Data</Button>
-                        <Dialog open={isBulkAddOpen} onOpenChange={setIsBulkAddOpen}>
-                            <DialogTrigger asChild>
-                                <Button variant="outline"><Users className="mr-2 h-4 w-4" /> Bulk Add Users</Button>
-                            </DialogTrigger>
-                            <DialogContent className="sm:max-w-[625px]">
-                                <DialogHeader>
-                                    <DialogTitle>Bulk Add New Users</DialogTitle>
-                                    <DialogDescription>
-                                        Paste user data below, one user per line. The system will create an account for each.
-                                    </DialogDescription>
-                                </DialogHeader>
-                                <div className="grid gap-4 py-4">
-                                    <Label htmlFor="bulk-add-data">User Data</Label>
-                                    <Textarea 
-                                        id="bulk-add-data"
-                                        placeholder="John Doe,john@example.com,1234567890,password123,2022-01-15"
-                                        value={bulkAddData}
-                                        onChange={(e) => setBulkAddData(e.target.value)}
-                                        className="min-h-[200px] font-mono text-xs"
-                                    />
-                                    <p className="text-sm text-muted-foreground">
-                                        <b>Format (comma-separated):</b><br/>
-                                        name, email, phone, password, joining_date (YYYY-MM-DD)
-                                    </p>
-                                </div>
-                                <DialogFooter>
-                                    <Button onClick={handleBulkAdd} disabled={isPending || !bulkAddData.trim()}>
-                                        {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                        Add Users
-                                    </Button>
-                                </DialogFooter>
-                            </DialogContent>
-                        </Dialog>
                         <Dialog open={isAddUserOpen} onOpenChange={setIsAddUserOpen}>
                             <DialogTrigger asChild>
                                 <Button><PlusCircle className="mr-2 h-4 w-4" /> Add User</Button>
@@ -464,7 +411,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 </Card>
             </main>
 
-            {/* --- Edit User Dialog --- */}
             <Dialog open={isEditUserOpen} onOpenChange={setIsEditUserOpen}>
                 <DialogContent>
                     <DialogHeader>
