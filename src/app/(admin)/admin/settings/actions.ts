@@ -10,27 +10,34 @@ const BILLING_DOC_ID = 'billing';
 // Schema for validating the input
 const BillingSettingsSchema = z.object({
   monthlyAmount: z.coerce.number().positive('Amount must be a positive number.'),
+  automaticReminders: z.preprocess((val) => val === 'on' || val === 'true', z.boolean()),
+  manualBulkPayment: z.preprocess((val) => val === 'on' || val === 'true', z.boolean()),
 });
 
 /**
  * Fetches the current billing settings from Firestore.
  * @returns An object containing the monthly amount. Defaults to 250 if not set.
  */
-export async function getBillingSettings(): Promise<{ monthlyAmount: number }> {
+export async function getBillingSettings(): Promise<{ monthlyAmount: number, automaticReminders: boolean, manualBulkPayment: boolean }> {
   try {
     const adminDb = getAdminDb();
     const docRef = adminDb.collection(SETTINGS_COLLECTION).doc(BILLING_DOC_ID);
     const docSnap = await docRef.get();
 
     if (docSnap.exists) {
-      return { monthlyAmount: docSnap.data()?.monthlyAmount || 250 };
+      const data = docSnap.data();
+      return { 
+        monthlyAmount: data?.monthlyAmount || 250,
+        automaticReminders: data?.automaticReminders || false,
+        manualBulkPayment: data?.manualBulkPayment || false
+      };
     }
     // Return a default value if no setting is found in the database
-    return { monthlyAmount: 250 };
+    return { monthlyAmount: 250, automaticReminders: false, manualBulkPayment: false };
   } catch (error) {
     console.error("Error fetching billing settings:", error);
     // Return default on error to prevent the app from crashing
-    return { monthlyAmount: 250 };
+    return { monthlyAmount: 250, automaticReminders: false, manualBulkPayment: false };
   }
 }
 
@@ -42,6 +49,8 @@ export async function getBillingSettings(): Promise<{ monthlyAmount: number }> {
 export async function updateBillingSettings(formData: FormData) {
   const rawData = {
     monthlyAmount: formData.get('monthlyAmount'),
+    automaticReminders: formData.get('automaticReminders'),
+    manualBulkPayment: formData.get('manualBulkPayment')
   };
 
   // Validate the input from the form
@@ -53,16 +62,16 @@ export async function updateBillingSettings(formData: FormData) {
   }
 
   try {
-    const { monthlyAmount } = validatedFields.data;
+    const { monthlyAmount, automaticReminders, manualBulkPayment } = validatedFields.data;
     const adminDb = getAdminDb();
     const docRef = adminDb.collection(SETTINGS_COLLECTION).doc(BILLING_DOC_ID);
 
     // Use set with merge: true to create the document if it doesn't exist, or update it if it does.
-    await docRef.set({ monthlyAmount }, { merge: true });
+    await docRef.set({ monthlyAmount, automaticReminders, manualBulkPayment }, { merge: true });
 
     // Revalidate the path to ensure the new value is shown on refresh
     revalidatePath('/admin/settings');
-    return { success: true, message: `Monthly bill amount updated to ₹${monthlyAmount}.` };
+    return { success: true, message: `Settings have been updated successfully.` };
 
   } catch (error) {
     console.error('Error updating billing settings:', error);
