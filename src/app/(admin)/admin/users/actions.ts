@@ -45,7 +45,7 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
 }
 
 
-// --- *** FINAL, MOST ROBUST CSV IMPORT ACTION V4 *** ---
+// --- *** SIMPLIFIED CSV IMPORT ACTION *** ---
 export async function importUsersFromCsvAction(csvData: string) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
@@ -71,7 +71,7 @@ export async function importUsersFromCsvAction(csvData: string) {
             return obj;
         }, {} as Record<string, string>);
 
-        const { name, email, phone, password, joining_date, last_payment_month, admission_fee, misc_dues } = entry;
+        const { name, email, phone, password, joining_date, last_payment_month } = entry;
 
         if (!email || !joining_date) {
             errors.push(`Row ${index + 2}: Missing required fields (email, joining_date).`);
@@ -82,14 +82,9 @@ export async function importUsersFromCsvAction(csvData: string) {
         try {
             const usersRef = adminDb.collection('users');
             const querySnapshot = await usersRef.where('email', '==', email).limit(1).get();
-
-            const admissionFeeNum = parseFloat(admission_fee) || 0;
-            const miscDuesNum = parseFloat(misc_dues) || 0;
             
             const totalDuesToDate = calculateDuesForPeriod(joining_date, todayStr);
             
-            // *** THE FINAL, ROBUST FIX IS HERE ***
-            // This now safely checks for blank or undefined values before processing.
             let totalPaid = 0;
             if (typeof last_payment_month === 'string' && last_payment_month.trim() !== '') {
                 const firstDayOfPaidMonthStr = `${last_payment_month.trim()}-01`;
@@ -104,7 +99,7 @@ export async function importUsersFromCsvAction(csvData: string) {
                 }
             }
             
-            const pending = (totalDuesToDate + admissionFeeNum + miscDuesNum) - totalPaid;
+            const pending = totalDuesToDate - totalPaid;
 
             if (querySnapshot.empty) {
                 if (!name || !phone || !password) {
