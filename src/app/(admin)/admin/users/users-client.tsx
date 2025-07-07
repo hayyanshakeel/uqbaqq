@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import type { User } from '@/lib/data-service';
-import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction } from './actions';
+import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, importUsersFromCsvAction } from './actions';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
@@ -23,6 +23,8 @@ type UsersClientProps = {
 export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [filteredUsers, setFilteredUsers] = useState(initialUsers);
     const [isAddUserOpen, setIsAddUserOpen] = useState(false);
+    const [isImportOpen, setIsImportOpen] = useState(false); // New state for import dialog
+    const [selectedFile, setSelectedFile] = useState<File | null>(null); // New state for selected file
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
     const [isAddMissedBillOpen, setIsAddMissedBillOpen] = useState(false);
@@ -35,6 +37,31 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const addUserFormRef = useRef<HTMLFormElement>(null);
     const recordPaymentFormRef = useRef<HTMLFormElement>(null);
     const addMissedBillFormRef = useRef<HTMLFormElement>(null);
+
+    // --- New handler for CSV import ---
+    const handleImport = () => {
+        if (!selectedFile) {
+            toast({ variant: "destructive", title: "No File Selected", description: "Please select a CSV file to import." });
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const csvData = event.target?.result as string;
+            startTransition(async () => {
+                const result = await importUsersFromCsvAction(csvData);
+                if (result.success) {
+                    toast({ title: "Import Successful", description: result.message });
+                } else {
+                    toast({ variant: "destructive", title: "Import Failed", description: `${result.message} Check console for details.` });
+                    console.error("Import Errors:", result.errors);
+                }
+                setIsImportOpen(false);
+                setSelectedFile(null);
+            });
+        };
+        reader.readAsText(selectedFile);
+    };
 
     const handleAddUser = async (formData: FormData) => {
         startTransition(async () => {
@@ -133,17 +160,18 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setFilteredUsers(newFilteredUsers);
     };
 
-    const handleDownloadDemo = () => {
-        const headers = ['name', 'email', 'phone', 'totalPaid', 'pending'];
+    // --- Updated Download Template Handler ---
+    const handleDownloadTemplate = () => {
+        const headers = ['email', 'joining_date', 'total_paid_manual'];
         const csvContent = "data:text/csv;charset=utf-8,"
             + headers.join(",") + "\n"
-            + "John Doe,john.doe@example.com,1234567890,500,250\n"
-            + "Jane Smith,jane.smith@example.com,0987654321,750,0";
+            + "user1@example.com,2015-06-01,5000\n"
+            + "another@example.com,2005-11-01,1500";
 
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
         link.setAttribute("href", encodedUri);
-        link.setAttribute("download", "hayyaan-welfare-template.csv");
+        link.setAttribute("download", "uqba-import-template.csv");
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -169,7 +197,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         const csvContent = "data:text/csv;charset=utf-8," + encodeURIComponent(csvRows.join("\n"));
         const link = document.createElement("a");
         link.setAttribute("href", csvContent);
-        link.setAttribute("download", "hayyaan-welfare-users-export.csv");
+        link.setAttribute("download", "uqba-users-export.csv");
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -227,28 +255,43 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     return (
         <>
             <main className="flex-1 space-y-4 p-4 md:p-8 pt-6">
-                {/* *** FIX: Header now uses flex-col on mobile and flex-row on larger screens *** */}
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
                         <h2 className="text-3xl font-bold font-headline tracking-tight">User Management</h2>
                         <p className="text-muted-foreground">Manage all committee members and their payment records.</p>
                     </div>
-                    {/* *** FIX: Button group now wraps on mobile screens *** */}
                     <div className="flex items-center space-x-2 flex-wrap gap-2">
                         <Button variant="outline" onClick={handleExportData}><Download className="mr-2 h-4 w-4" /> Export Data</Button>
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                                <Button variant="outline"><Upload className="mr-2 h-4 w-4" /> Import Users</Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                                <DropdownMenuItem onSelect={() => alert('Import from file functionality is not yet implemented.')}>
-                                    Import from File...
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onSelect={handleDownloadDemo}>
-                                    Download Template
-                                </DropdownMenuItem>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
+                        {/* --- Updated Import Button and Dialog --- */}
+                        <Dialog open={isImportOpen} onOpenChange={setIsImportOpen}>
+                            <DialogTrigger asChild>
+                                <Button variant="outline"><Upload className="mr-2 h-4 w-4" /> Import Balances</Button>
+                            </DialogTrigger>
+                            <DialogContent>
+                                <DialogHeader>
+                                    <DialogTitle>Import User Balances from CSV</DialogTitle>
+                                    <DialogDescription>
+                                        Upload a CSV file to bulk update user balances based on their joining date and past payments.
+                                    </DialogDescription>
+                                </DialogHeader>
+                                <div className="grid gap-4 py-4">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="csv-file">CSV File</Label>
+                                        <Input id="csv-file" type="file" accept=".csv" onChange={(e) => setSelectedFile(e.target.files ? e.target.files[0] : null)} />
+                                        <p className="text-sm text-muted-foreground">
+                                            File must have columns: `email`, `joining_date` (YYYY-MM-DD), `total_paid_manual`.
+                                        </p>
+                                    </div>
+                                    <Button variant="link" className="p-0 h-auto justify-start" onClick={handleDownloadTemplate}>Download Template</Button>
+                                </div>
+                                <DialogFooter>
+                                    <Button onClick={handleImport} disabled={isPending || !selectedFile}>
+                                        {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                        Import and Calculate
+                                    </Button>
+                                </DialogFooter>
+                            </DialogContent>
+                        </Dialog>
                         <Dialog open={isAddUserOpen} onOpenChange={setIsAddUserOpen}>
                             <DialogTrigger asChild>
                                 <Button><PlusCircle className="mr-2 h-4 w-4" /> Add User</Button>
@@ -301,7 +344,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                         </div>
                     </CardHeader>
                     <CardContent>
-                        {/* Desktop Table */}
                         <div className="hidden md:block">
                             <Table>
                                 <TableHeader>
@@ -343,7 +385,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                 </TableBody>
                             </Table>
                         </div>
-                        {/* Mobile Card View */}
                         <div className="space-y-4 md:hidden">
                              {filteredUsers.map((user) => (
                                 <Card key={user.id}>
@@ -486,4 +527,3 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         </>
     );
 }
-
