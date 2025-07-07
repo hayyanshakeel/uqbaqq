@@ -7,12 +7,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PlusCircle, Upload, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2 } from "lucide-react";
+import { PlusCircle, Upload, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit } from "lucide-react";
 import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import type { User } from '@/lib/data-service';
-import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, importUsersFromCsvAction } from './actions';
+import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, importUsersFromCsvAction, updateUserAction } from './actions';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
@@ -23,8 +23,9 @@ type UsersClientProps = {
 export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [filteredUsers, setFilteredUsers] = useState(initialUsers);
     const [isAddUserOpen, setIsAddUserOpen] = useState(false);
-    const [isImportOpen, setIsImportOpen] = useState(false); // New state for import dialog
-    const [selectedFile, setSelectedFile] = useState<File | null>(null); // New state for selected file
+    const [isEditUserOpen, setIsEditUserOpen] = useState(false);
+    const [isImportOpen, setIsImportOpen] = useState(false);
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
     const [isAddMissedBillOpen, setIsAddMissedBillOpen] = useState(false);
@@ -35,10 +36,10 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [isPending, startTransition] = useTransition();
 
     const addUserFormRef = useRef<HTMLFormElement>(null);
+    const editUserFormRef = useRef<HTMLFormElement>(null);
     const recordPaymentFormRef = useRef<HTMLFormElement>(null);
     const addMissedBillFormRef = useRef<HTMLFormElement>(null);
 
-    // --- New handler for CSV import ---
     const handleImport = () => {
         if (!selectedFile) {
             toast({ variant: "destructive", title: "No File Selected", description: "Please select a CSV file to import." });
@@ -75,6 +76,19 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
             }
         });
     }
+
+    const handleUpdateUser = async (formData: FormData) => {
+        if (!selectedUser) return;
+        startTransition(async () => {
+            const result = await updateUserAction(selectedUser.id, formData);
+            if (result.success) {
+                toast({ title: "User Updated", description: result.message });
+                setIsEditUserOpen(false);
+            } else {
+                toast({ variant: "destructive", title: "Error", description: result.message });
+            }
+        });
+    };
 
     const confirmDeleteUser = (user: User) => {
         setConfirmAction({
@@ -160,13 +174,12 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setFilteredUsers(newFilteredUsers);
     };
 
-    // --- Updated Download Template Handler ---
     const handleDownloadTemplate = () => {
-        const headers = ['email', 'joining_date', 'total_paid_manual'];
+        const headers = ['name', 'email', 'phone', 'password', 'joining_date', 'last_payment_month', 'admission_fee', 'misc_dues'];
         const csvContent = "data:text/csv;charset=utf-8,"
             + headers.join(",") + "\n"
-            + "user1@example.com,2015-06-01,5000\n"
-            + "another@example.com,2005-11-01,1500";
+            + "New Member,new@example.com,1234567890,newPass123,2023-01-15,2023-12,500,\n"
+            + "Existing Member,user1@example.com,,,,2015-06-01,2024-03,,100";
 
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
@@ -208,6 +221,11 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setFilteredUsers(initialUsers);
     }, [initialUsers]);
 
+    const openEditUserDialog = (user: User) => {
+        setSelectedUser(user);
+        setIsEditUserOpen(true);
+    };
+
     const openRecordPaymentDialog = (user: User) => {
         setSelectedUser(user);
         setIsRecordPaymentOpen(true);
@@ -227,6 +245,10 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => openEditUserDialog(user)}>
+                    <Edit className="mr-2 h-4 w-4" />
+                    <span>Edit User</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openRecordPaymentDialog(user)}>
                     <CreditCard className="mr-2 h-4 w-4" />
                     <span>Record Payment</span>
@@ -262,16 +284,15 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     </div>
                     <div className="flex items-center space-x-2 flex-wrap gap-2">
                         <Button variant="outline" onClick={handleExportData}><Download className="mr-2 h-4 w-4" /> Export Data</Button>
-                        {/* --- Updated Import Button and Dialog --- */}
                         <Dialog open={isImportOpen} onOpenChange={setIsImportOpen}>
                             <DialogTrigger asChild>
-                                <Button variant="outline"><Upload className="mr-2 h-4 w-4" /> Import Balances</Button>
+                                <Button variant="outline"><Upload className="mr-2 h-4 w-4" /> Import / Create</Button>
                             </DialogTrigger>
                             <DialogContent>
                                 <DialogHeader>
-                                    <DialogTitle>Import User Balances from CSV</DialogTitle>
+                                    <DialogTitle>Import or Create Users from CSV</DialogTitle>
                                     <DialogDescription>
-                                        Upload a CSV file to bulk update user balances based on their joining date and past payments.
+                                        Upload a CSV to update existing users or create new ones. The system will calculate all dues automatically.
                                     </DialogDescription>
                                 </DialogHeader>
                                 <div className="grid gap-4 py-4">
@@ -279,7 +300,9 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                         <Label htmlFor="csv-file">CSV File</Label>
                                         <Input id="csv-file" type="file" accept=".csv" onChange={(e) => setSelectedFile(e.target.files ? e.target.files[0] : null)} />
                                         <p className="text-sm text-muted-foreground">
-                                            File must have columns: `email`, `joining_date` (YYYY-MM-DD), `total_paid_manual`.
+                                            <b>Required:</b> `email`, `joining_date`.<br/>
+                                            <b>For new users:</b> `name`, `phone`, `password` are also required.<br/>
+                                            <b>Important:</b> Use `last_payment_month` in YYYY-MM format.
                                         </p>
                                     </div>
                                     <Button variant="link" className="p-0 h-auto justify-start" onClick={handleDownloadTemplate}>Download Template</Button>
@@ -287,7 +310,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                 <DialogFooter>
                                     <Button onClick={handleImport} disabled={isPending || !selectedFile}>
                                         {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                        Import and Calculate
+                                        Process File
                                     </Button>
                                 </DialogFooter>
                             </DialogContent>
@@ -432,6 +455,44 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     </CardContent>
                 </Card>
             </main>
+
+            {/* --- Edit User Dialog --- */}
+            <Dialog open={isEditUserOpen} onOpenChange={setIsEditUserOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Edit User: {selectedUser?.name}</DialogTitle>
+                        <DialogDescription>
+                            Update the user's details here. Changes will be saved to both authentication and the database.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form ref={editUserFormRef} action={handleUpdateUser}>
+                        <div className="grid gap-4 py-4">
+                            <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="edit-name" className="text-right">Name</Label>
+                                <Input id="edit-name" name="name" className="col-span-3" defaultValue={selectedUser?.name} required />
+                            </div>
+                            <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="edit-email" className="text-right">Email</Label>
+                                <Input id="edit-email" name="email" type="email" className="col-span-3" defaultValue={selectedUser?.email} required />
+                            </div>
+                            <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="edit-phone" className="text-right">Phone</Label>
+                                <Input id="edit-phone" name="phone" className="col-span-3" defaultValue={selectedUser?.phone} required />
+                            </div>
+                            <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="edit-password" className="text-right">New Password</Label>
+                                <Input id="edit-password" name="password" type="password" className="col-span-3" placeholder="Leave blank to keep unchanged" />
+                            </div>
+                        </div>
+                        <DialogFooter>
+                            <Button type="submit" disabled={isPending}>
+                                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                Save Changes
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
 
             <Dialog open={isRecordPaymentOpen} onOpenChange={setIsRecordPaymentOpen}>
                 <DialogContent>
