@@ -15,6 +15,7 @@ const feeStructure = [
 
 // --- Helper function to calculate dues for a given period ---
 function calculateDuesForPeriod(startDateStr: string, endDateStr: string): number {
+    // Use a specific format for parsing to avoid ambiguity
     const startDate = startOfMonth(parse(startDateStr, 'yyyy-MM-dd', new Date()));
     const endDate = startOfMonth(parse(endDateStr, 'yyyy-MM-dd', new Date()));
     let totalDues = 0;
@@ -53,7 +54,7 @@ export async function importUsersFromCsvAction(csvData: string) {
     let successCount = 0;
     let errorCount = 0;
     const errors: string[] = [];
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = new Date().toISOString().split('T')[0]; // yyyy-MM-dd format
 
     for (const [index, row] of data.entries()) {
         const values = row.split(',').map(v => v.trim());
@@ -77,8 +78,11 @@ export async function importUsersFromCsvAction(csvData: string) {
             const admissionFeeNum = parseFloat(admission_fee) || 0;
             const miscDuesNum = parseFloat(misc_dues) || 0;
             
+            // Calculate total amount they should have paid from joining until today
             const totalDuesToDate = calculateDuesForPeriod(joining_date, todayStr);
-            const lastPaymentDate = last_payment_month ? `${last_payment_month}-28` : null;
+
+            // Calculate amount they have actually paid based on the last_payment_month
+            const lastPaymentDate = last_payment_month ? `${last_payment_month}-28` : null; // Use end of month
             const totalPaid = lastPaymentDate ? calculateDuesForPeriod(joining_date, lastPaymentDate) : 0;
             
             const pending = (totalDuesToDate + admissionFeeNum + miscDuesNum) - totalPaid;
@@ -133,7 +137,7 @@ export async function importUsersFromCsvAction(csvData: string) {
     };
 }
 
-// --- *** UPDATED: Server Action to Update User Details and Password *** ---
+// --- Server Action to Update User Details and Password ---
 export async function updateUserAction(userId: string, formData: FormData) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
@@ -157,7 +161,6 @@ export async function updateUserAction(userId: string, formData: FormData) {
             phoneNumber: phone 
         };
         
-        // *** THIS IS THE NEW LOGIC ***
         // Only add the password to the payload if a new one was provided
         if (password) {
             if (password.length < 6) {
