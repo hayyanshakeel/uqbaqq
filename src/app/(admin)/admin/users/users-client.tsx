@@ -175,11 +175,11 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     };
 
     const handleDownloadTemplate = () => {
-        const headers = ['name', 'email', 'phone', 'password', 'joining_date', 'last_payment_month', 'admission_fee', 'misc_dues'];
+        const headers = ['name', 'email', 'phone', 'password', 'joining_date', 'last_payment_month'];
         const csvContent = "data:text/csv;charset=utf-8,"
             + headers.join(",") + "\n"
-            + "New Member,new@example.com,1234567890,newPass123,2023-01-15,2023-12,500,\n"
-            + "Existing Member,user1@example.com,,,,2015-06-01,2024-03,,100";
+            + "New Member,new@example.com,1234567890,newPass123,2023-01-15,2023-12\n"
+            + "Existing Member,user1@example.com,,,,2015-06-01,2024-03";
 
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
@@ -302,7 +302,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                         <p className="text-sm text-muted-foreground">
                                             <b>Required:</b> `email`, `joining_date`.<br/>
                                             <b>For new users:</b> `name`, `phone`, `password` are also required.<br/>
-                                            <b>Important:</b> Use `last_payment_month` intestHDR-MM format.
+                                            <b>Important:</b> Use `last_payment_month` in YYYY-MM format.
                                         </p>
                                     </div>
                                     <Button variant="link" className="p-0 h-auto justify-start" onClick={handleDownloadTemplate}>Download Template</Button>
