@@ -2,7 +2,7 @@
 
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
-import { differenceInMonths, parseISO, startOfMonth } from 'date-fns';
+import { differenceInMonths, parse, startOfMonth, addMonths } from 'date-fns';
 
 // --- Fee Structure Definition ---
 const feeStructure = [
@@ -10,26 +10,28 @@ const feeStructure = [
     { start: '2007-05-01', end: '2014-04-30', fee: 50 },
     { start: '2014-05-01', end: '2019-06-30', fee: 100 },
     { start: '2019-07-01', end: '2024-03-31', fee: 200 },
-    { start: '2024-04-01', end: '9999-12-31', fee: 250 } // Future-proof end date
+    { start: '2024-04-01', end: '9999-12-31', fee: 250 }
 ];
 
-// --- Helper Function to Calculate Total Dues ---
-function calculateTotalDues(joiningDateStr: string): number {
-    const joiningDate = startOfMonth(parseISO(joiningDateStr));
-    const currentDate = startOfMonth(new Date());
+// --- Helper function to calculate dues for a given period ---
+function calculateDuesForPeriod(startDateStr: string, endDateStr: string): number {
+    const startDate = startOfMonth(parse(startDateStr, 'yyyy-MM-dd', new Date()));
+    const endDate = startOfMonth(parse(endDateStr, 'yyyy-MM-dd', new Date()));
     let totalDues = 0;
 
-    if (joiningDate > currentDate) return 0;
-
-    const totalMonths = differenceInMonths(currentDate, joiningDate) + 1;
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || startDate > endDate) {
+        return 0;
+    }
+    
+    const totalMonths = differenceInMonths(endDate, startDate) + 1;
 
     for (let i = 0; i < totalMonths; i++) {
-        const monthDate = new Date(joiningDate.getFullYear(), joiningDate.getMonth() + i, 1);
+        const monthDate = addMonths(startDate, i);
         
         const applicableTier = feeStructure.find(tier => {
-            const startDate = parseISO(tier.start);
-            const endDate = parseISO(tier.end);
-            return monthDate >= startDate && monthDate <= endDate;
+            const tierStart = parse(tier.start, 'yyyy-MM-dd', new Date());
+            const tierEnd = parse(tier.end, 'yyyy-MM-dd', new Date());
+            return monthDate >= tierStart && monthDate <= tierEnd;
         });
 
         if (applicableTier) {
@@ -40,9 +42,10 @@ function calculateTotalDues(joiningDateStr: string): number {
 }
 
 
-// --- New Server Action for CSV Import ---
+// --- CSV IMPORT ACTION ---
 export async function importUsersFromCsvAction(csvData: string) {
     const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
     const lines = csvData.trim().split('\n');
     const headers = lines[0].split(',').map(h => h.trim());
     const data = lines.slice(1);
@@ -50,6 +53,7 @@ export async function importUsersFromCsvAction(csvData: string) {
     let successCount = 0;
     let errorCount = 0;
     const errors: string[] = [];
+    const todayStr = new Date().toISOString().split('T')[0];
 
     for (const [index, row] of data.entries()) {
         const values = row.split(',').map(v => v.trim());
@@ -58,10 +62,10 @@ export async function importUsersFromCsvAction(csvData: string) {
             return obj;
         }, {} as Record<string, string>);
 
-        const { email, joining_date, total_paid_manual } = entry;
+        const { name, email, phone, password, joining_date, last_payment_month, admission_fee, misc_dues } = entry;
 
-        if (!email || !joining_date || !total_paid_manual) {
-            errors.push(`Row ${index + 2}: Missing required fields.`);
+        if (!email || !joining_date) {
+            errors.push(`Row ${index + 2}: Missing required fields (email, joining_date).`);
             errorCount++;
             continue;
         }
@@ -70,23 +74,47 @@ export async function importUsersFromCsvAction(csvData: string) {
             const usersRef = adminDb.collection('users');
             const querySnapshot = await usersRef.where('email', '==', email).limit(1).get();
 
+            const admissionFeeNum = parseFloat(admission_fee) || 0;
+            const miscDuesNum = parseFloat(misc_dues) || 0;
+            
+            const totalDuesToDate = calculateDuesForPeriod(joining_date, todayStr);
+            const lastPaymentDate = last_payment_month ? `${last_payment_month}-28` : null;
+            const totalPaid = lastPaymentDate ? calculateDuesForPeriod(joining_date, lastPaymentDate) : 0;
+            
+            const pending = (totalDuesToDate + admissionFeeNum + miscDuesNum) - totalPaid;
+
             if (querySnapshot.empty) {
-                errors.push(`Row ${index + 2}: User with email ${email} not found.`);
-                errorCount++;
-                continue;
+                if (!name || !phone || !password) {
+                    errors.push(`Row ${index + 2}: New user requires name, phone, and password.`);
+                    errorCount++;
+                    continue;
+                }
+                if (password.length < 6) {
+                     errors.push(`Row ${index + 2}: Password for new user ${name} must be at least 6 characters.`);
+                     errorCount++;
+                     continue;
+                }
+
+                const userRecord = await adminAuth.createUser({ email, password, displayName: name, phoneNumber: phone });
+
+                await usersRef.doc(userRecord.uid).set({
+                    name, phone, email, totalPaid,
+                    pending: pending < 0 ? 0 : pending,
+                    status: pending <= 0 ? 'paid' : 'pending',
+                    joined: new Date(joining_date).toISOString(),
+                });
+
+            } else {
+                const userDoc = querySnapshot.docs[0];
+                await userDoc.ref.update({
+                    totalPaid,
+                    pending: pending < 0 ? 0 : pending,
+                    status: pending <= 0 ? 'paid' : 'pending',
+                    joined: new Date(joining_date).toISOString(),
+                    name: name || userDoc.data().name,
+                    phone: phone || userDoc.data().phone,
+                });
             }
-
-            const userDoc = querySnapshot.docs[0];
-            const totalDues = calculateTotalDues(joining_date);
-            const totalPaid = parseFloat(total_paid_manual);
-            const pending = totalDues - totalPaid;
-
-            await userDoc.ref.update({
-                totalPaid: totalPaid,
-                pending: pending < 0 ? 0 : pending,
-                status: pending <= 0 ? 'paid' : 'pending',
-                joined: new Date(joining_date).toISOString() // Also update joined date
-            });
 
             successCount++;
         } catch (error: any) {
@@ -100,14 +128,63 @@ export async function importUsersFromCsvAction(csvData: string) {
 
     return {
         success: errorCount === 0,
-        message: `Import complete. ${successCount} users updated. ${errorCount} rows failed.`,
+        message: `Import complete. ${successCount} users processed. ${errorCount} rows failed.`,
         errors
     };
 }
 
+// --- *** UPDATED: Server Action to Update User Details and Password *** ---
+export async function updateUserAction(userId: string, formData: FormData) {
+    const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
+
+    const name = formData.get('name') as string;
+    const email = formData.get('email') as string;
+    const phone = formData.get('phone') as string;
+    const password = formData.get('password') as string; // Get the new password
+
+    if (!name || !email || !phone) {
+        return { success: false, message: 'Name, email, and phone are required.' };
+    }
+
+    try {
+        const firestoreUpdatePayload = { name, email, phone };
+        
+        // Prepare the payload for Firebase Auth update
+        const authUpdatePayload: { displayName: string; email: string; phoneNumber: string; password?: string } = { 
+            displayName: name, 
+            email, 
+            phoneNumber: phone 
+        };
+        
+        // *** THIS IS THE NEW LOGIC ***
+        // Only add the password to the payload if a new one was provided
+        if (password) {
+            if (password.length < 6) {
+                return { success: false, message: 'New password must be at least 6 characters long.' };
+            }
+            authUpdatePayload.password = password;
+        }
+
+        // Update Firebase Authentication
+        await adminAuth.updateUser(userId, authUpdatePayload);
+
+        // Update Firestore Database
+        await adminDb.collection('users').doc(userId).update(firestoreUpdatePayload);
+
+        revalidatePath('/admin/users');
+        return { success: true, message: 'User details updated successfully.' };
+    } catch (error: any) {
+        console.error("Error updating user:", error);
+        if (error.code === 'auth/email-already-exists') {
+            return { success: false, message: 'This email address is already in use by another account.' };
+        }
+        return { success: false, message: 'Failed to update user details.' };
+    }
+}
+
 
 // --- Existing User Actions (Unchanged) ---
-
 export async function addUserAction(formData: FormData) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
