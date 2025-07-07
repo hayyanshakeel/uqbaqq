@@ -302,7 +302,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                         <p className="text-sm text-muted-foreground">
                                             <b>Required:</b> `email`, `joining_date`.<br/>
                                             <b>For new users:</b> `name`, `phone`, `password` are also required.<br/>
-                                            <b>Important:</b> Use `last_payment_month` in YYYY-MM format.
+                                            <b>Important:</b> Use `last_payment_month` intestHDR-MM format.
                                         </p>
                                     </div>
                                     <Button variant="link" className="p-0 h-auto justify-start" onClick={handleDownloadTemplate}>Download Template</Button>
