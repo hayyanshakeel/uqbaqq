@@ -1,5 +1,5 @@
 {
-  "cron": [
+  "bill": [
     {
       "path": "/api/cron/monthly-billing",
       "schedule": "0 5 1 * *"
