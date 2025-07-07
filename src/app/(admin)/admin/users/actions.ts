@@ -43,6 +43,52 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
     return totalDues;
 }
 
+// --- *** NEW: Server Action to Mark a User as Deceased *** ---
+export async function markAsDeceasedAction(userId: string, formData: FormData) {
+    const dateOfDeathStr = formData.get('dateOfDeath') as string;
+
+    if (!userId || !dateOfDeathStr) {
+        return { success: false, message: 'User ID and Date of Death are required.' };
+    }
+
+    try {
+        const adminDb = getAdminDb();
+        const adminAuth = getAdminAuth();
+        const userRef = adminDb.collection('users').doc(userId);
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) {
+            throw new Error("User not found.");
+        }
+        
+        const userData = userDoc.data()!;
+        const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
+        
+        // Calculate the final dues only up to the date of death
+        const finalDues = calculateDuesForPeriod(joiningDate, dateOfDeathStr);
+        const finalPending = finalDues - (userData.totalPaid || 0);
+
+        // Update the user's document in Firestore
+        await userRef.update({
+            status: 'deceased',
+            pending: finalPending < 0 ? 0 : finalPending, // Set final pending amount
+            dateOfDeath: new Date(dateOfDeathStr)
+        });
+
+        // Disable the user's account in Firebase Auth to prevent logins
+        await adminAuth.updateUser(userId, { disabled: true });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+
+        return { success: true, message: 'User has been marked as deceased. Their account is now inactive and balance finalized.' };
+    } catch (error: any) {
+        console.error("Error marking user as deceased:", error);
+        return { success: false, message: error.message };
+    }
+}
+
+
 // --- Server Action to Bulk Record Past Payments ---
 export async function recordBulkPaymentAction(userId: string, formData: FormData) {
     const fromMonth = formData.get('fromMonth') as string;
