@@ -45,7 +45,7 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
 }
 
 
-// --- *** FINAL, MOST ROBUST CSV IMPORT ACTION *** ---
+// --- *** FINAL, MOST ROBUST CSV IMPORT ACTION V4 *** ---
 export async function importUsersFromCsvAction(csvData: string) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
@@ -89,9 +89,9 @@ export async function importUsersFromCsvAction(csvData: string) {
             const totalDuesToDate = calculateDuesForPeriod(joining_date, todayStr);
             
             // *** THE FINAL, ROBUST FIX IS HERE ***
-            // This now correctly handles blank cells for last_payment_month.
+            // This now safely checks for blank or undefined values before processing.
             let totalPaid = 0;
-            if (last_payment_month && last_payment_month.trim() !== '') {
+            if (typeof last_payment_month === 'string' && last_payment_month.trim() !== '') {
                 const firstDayOfPaidMonthStr = `${last_payment_month.trim()}-01`;
                 const firstDayOfPaidMonth = parse(firstDayOfPaidMonthStr, 'yyyy-MM-dd', new Date());
 
