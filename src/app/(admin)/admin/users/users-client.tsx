@@ -7,12 +7,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PlusCircle, Upload, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit } from "lucide-react";
+import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, Users } from "lucide-react";
 import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import type { User } from '@/lib/data-service';
-import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, importUsersFromCsvAction, updateUserAction } from './actions';
+import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, updateUserAction, recordBulkPaymentAction, bulkAddUsersAction } from './actions';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
@@ -23,11 +23,12 @@ type UsersClientProps = {
 export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [filteredUsers, setFilteredUsers] = useState(initialUsers);
     const [isAddUserOpen, setIsAddUserOpen] = useState(false);
+    const [isBulkAddOpen, setIsBulkAddOpen] = useState(false);
+    const [bulkAddData, setBulkAddData] = useState('');
     const [isEditUserOpen, setIsEditUserOpen] = useState(false);
-    const [isImportOpen, setIsImportOpen] = useState(false);
-    const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
+    const [isBulkRecordOpen, setIsBulkRecordOpen] = useState(false);
     const [isAddMissedBillOpen, setIsAddMissedBillOpen] = useState(false);
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{ action: () => void, title: string, description: string } | null>(null);
@@ -38,30 +39,25 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const addUserFormRef = useRef<HTMLFormElement>(null);
     const editUserFormRef = useRef<HTMLFormElement>(null);
     const recordPaymentFormRef = useRef<HTMLFormElement>(null);
+    const bulkRecordFormRef = useRef<HTMLFormElement>(null);
     const addMissedBillFormRef = useRef<HTMLFormElement>(null);
 
-    const handleImport = () => {
-        if (!selectedFile) {
-            toast({ variant: "destructive", title: "No File Selected", description: "Please select a CSV file to import." });
+    const handleBulkAdd = () => {
+        if (!bulkAddData.trim()) {
+            toast({ variant: "destructive", title: "No Data", description: "Please paste user data into the text box." });
             return;
         }
-
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            const csvData = event.target?.result as string;
-            startTransition(async () => {
-                const result = await importUsersFromCsvAction(csvData);
-                if (result.success) {
-                    toast({ title: "Import Successful", description: result.message });
-                } else {
-                    toast({ variant: "destructive", title: "Import Failed", description: `${result.message} Check console for details.` });
-                    console.error("Import Errors:", result.errors);
-                }
-                setIsImportOpen(false);
-                setSelectedFile(null);
-            });
-        };
-        reader.readAsText(selectedFile);
+        startTransition(async () => {
+            const result = await bulkAddUsersAction(bulkAddData);
+            if (result.success) {
+                toast({ title: "Bulk Add Successful", description: result.message });
+            } else {
+                toast({ variant: "destructive", title: "Bulk Add Failed", description: `${result.message} Check console for details.` });
+                console.error("Bulk Add Errors:", result.errors);
+            }
+            setIsBulkAddOpen(false);
+            setBulkAddData('');
+        });
     };
 
     const handleAddUser = async (formData: FormData) => {
@@ -84,6 +80,19 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
             if (result.success) {
                 toast({ title: "User Updated", description: result.message });
                 setIsEditUserOpen(false);
+            } else {
+                toast({ variant: "destructive", title: "Error", description: result.message });
+            }
+        });
+    };
+
+    const handleBulkRecord = async (formData: FormData) => {
+        if (!selectedUser) return;
+        startTransition(async () => {
+            const result = await recordBulkPaymentAction(selectedUser.id, formData);
+            if (result.success) {
+                toast({ title: "Bulk Record Successful", description: result.message });
+                setIsBulkRecordOpen(false);
             } else {
                 toast({ variant: "destructive", title: "Error", description: result.message });
             }
@@ -174,22 +183,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setFilteredUsers(newFilteredUsers);
     };
 
-    const handleDownloadTemplate = () => {
-        const headers = ['name', 'email', 'phone', 'password', 'joining_date', 'last_payment_month'];
-        const csvContent = "data:text/csv;charset=utf-8,"
-            + headers.join(",") + "\n"
-            + "New Member,new@example.com,1234567890,newPass123,2023-01-15,2023-12\n"
-            + "Existing Member,user1@example.com,,,,2015-06-01,2024-03";
-
-        const encodedUri = encodeURI(csvContent);
-        const link = document.createElement("a");
-        link.setAttribute("href", encodedUri);
-        link.setAttribute("download", "uqba-import-template.csv");
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    };
-
     const handleExportData = () => {
         const headers = ['name', 'email', 'phone', 'status', 'joined', 'totalPaid', 'pending'];
         const csvRows = [headers.join(",")];
@@ -231,6 +224,11 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setIsRecordPaymentOpen(true);
     };
 
+    const openBulkRecordDialog = (user: User) => {
+        setSelectedUser(user);
+        setIsBulkRecordOpen(true);
+    };
+
     const openAddMissedBillDialog = (user: User) => {
         setSelectedUser(user);
         setIsAddMissedBillOpen(true);
@@ -251,7 +249,11 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openRecordPaymentDialog(user)}>
                     <CreditCard className="mr-2 h-4 w-4" />
-                    <span>Record Payment</span>
+                    <span>Record Single Payment</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openBulkRecordDialog(user)}>
+                    <History className="mr-2 h-4 w-4" />
+                    <span>Bulk Record Past Payments</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openAddMissedBillDialog(user)}>
                     <CalendarPlus className="mr-2 h-4 w-4" />
@@ -284,33 +286,35 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     </div>
                     <div className="flex items-center space-x-2 flex-wrap gap-2">
                         <Button variant="outline" onClick={handleExportData}><Download className="mr-2 h-4 w-4" /> Export Data</Button>
-                        <Dialog open={isImportOpen} onOpenChange={setIsImportOpen}>
+                        <Dialog open={isBulkAddOpen} onOpenChange={setIsBulkAddOpen}>
                             <DialogTrigger asChild>
-                                <Button variant="outline"><Upload className="mr-2 h-4 w-4" /> Import / Create</Button>
+                                <Button variant="outline"><Users className="mr-2 h-4 w-4" /> Bulk Add Users</Button>
                             </DialogTrigger>
-                            <DialogContent>
+                            <DialogContent className="sm:max-w-[625px]">
                                 <DialogHeader>
-                                    <DialogTitle>Import or Create Users from CSV</DialogTitle>
+                                    <DialogTitle>Bulk Add New Users</DialogTitle>
                                     <DialogDescription>
-                                        Upload a CSV to update existing users or create new ones. The system will calculate all dues automatically.
+                                        Paste user data below, one user per line. The system will create an account for each.
                                     </DialogDescription>
                                 </DialogHeader>
                                 <div className="grid gap-4 py-4">
-                                    <div className="space-y-2">
-                                        <Label htmlFor="csv-file">CSV File</Label>
-                                        <Input id="csv-file" type="file" accept=".csv" onChange={(e) => setSelectedFile(e.target.files ? e.target.files[0] : null)} />
-                                        <p className="text-sm text-muted-foreground">
-                                            <b>Required:</b> `email`, `joining_date`.<br/>
-                                            <b>For new users:</b> `name`, `phone`, `password` are also required.<br/>
-                                            <b>Important:</b> Use `last_payment_month` in YYYY-MM format.
-                                        </p>
-                                    </div>
-                                    <Button variant="link" className="p-0 h-auto justify-start" onClick={handleDownloadTemplate}>Download Template</Button>
+                                    <Label htmlFor="bulk-add-data">User Data</Label>
+                                    <Textarea 
+                                        id="bulk-add-data"
+                                        placeholder="John Doe,john@example.com,1234567890,password123,2022-01-15"
+                                        value={bulkAddData}
+                                        onChange={(e) => setBulkAddData(e.target.value)}
+                                        className="min-h-[200px] font-mono text-xs"
+                                    />
+                                    <p className="text-sm text-muted-foreground">
+                                        <b>Format (comma-separated):</b><br/>
+                                        name, email, phone, password, joining_date (YYYY-MM-DD)
+                                    </p>
                                 </div>
                                 <DialogFooter>
-                                    <Button onClick={handleImport} disabled={isPending || !selectedFile}>
+                                    <Button onClick={handleBulkAdd} disabled={isPending || !bulkAddData.trim()}>
                                         {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                        Process File
+                                        Add Users
                                     </Button>
                                 </DialogFooter>
                             </DialogContent>
@@ -329,20 +333,24 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                 <form ref={addUserFormRef} action={handleAddUser}>
                                     <div className="grid gap-4 py-4">
                                         <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="name" className="text-right">Name</Label>
-                                            <Input id="name" name="name" className="col-span-3" placeholder="Full Name" required />
+                                            <Label htmlFor="add-name" className="text-right">Name</Label>
+                                            <Input id="add-name" name="name" className="col-span-3" placeholder="Full Name" required />
                                         </div>
                                         <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="phone" className="text-right">Phone</Label>
-                                            <Input id="phone" name="phone" className="col-span-3" placeholder="Phone Number" required />
+                                            <Label htmlFor="add-phone" className="text-right">Phone</Label>
+                                            <Input id="add-phone" name="phone" className="col-span-3" placeholder="Phone Number" required />
                                         </div>
                                         <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="email" className="text-right">Email</Label>
-                                            <Input id="email" name="email" type="email" className="col-span-3" placeholder="user@example.com" required />
+                                            <Label htmlFor="add-email" className="text-right">Email</Label>
+                                            <Input id="add-email" name="email" type="email" className="col-span-3" placeholder="user@example.com" required />
                                         </div>
                                         <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="password" className="text-right">Password</Label>
-                                            <Input id="password" name="password" type="password" className="col-span-3" placeholder="********" required />
+                                            <Label htmlFor="add-password" className="text-right">Password</Label>
+                                            <Input id="add-password" name="password" type="password" className="col-span-3" placeholder="********" required />
+                                        </div>
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                            <Label htmlFor="add-joining_date" className="text-right">Joining Date</Label>
+                                            <Input id="add-joining_date" name="joining_date" type="date" className="col-span-3" required />
                                         </div>
                                     </div>
                                     <DialogFooter>
@@ -497,7 +505,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
             <Dialog open={isRecordPaymentOpen} onOpenChange={setIsRecordPaymentOpen}>
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>Record Payment for {selectedUser?.name}</DialogTitle>
+                        <DialogTitle>Record Single Payment for {selectedUser?.name}</DialogTitle>
                         <DialogDescription>
                             Current pending amount is ₹{selectedUser?.pending.toFixed(2)}. Enter the amount paid.
                         </DialogDescription>
@@ -522,6 +530,35 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                             <Button type="submit" disabled={isPending}>
                                 {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                 Record Payment
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={isBulkRecordOpen} onOpenChange={setIsBulkRecordOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Bulk Record for {selectedUser?.name}</DialogTitle>
+                        <DialogDescription>
+                            Select the date range for which the user's payments are clear. The system will calculate the total paid and pending amounts automatically.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form ref={bulkRecordFormRef} action={handleBulkRecord}>
+                        <div className="grid gap-4 py-4">
+                            <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="fromMonth" className="text-right">Paid From</Label>
+                                <Input id="fromMonth" name="fromMonth" type="month" className="col-span-3" required />
+                            </div>
+                            <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="toMonth" className="text-right">Paid To</Label>
+                                <Input id="toMonth" name="toMonth" type="month" className="col-span-3" required />
+                            </div>
+                        </div>
+                        <DialogFooter>
+                            <Button type="submit" disabled={isPending}>
+                                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                Calculate & Save
                             </Button>
                         </DialogFooter>
                     </form>
