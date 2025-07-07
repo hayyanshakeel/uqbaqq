@@ -2,7 +2,7 @@
 
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
-import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth } from 'date-fns';
+import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid } from 'date-fns';
 
 // --- Fee Structure Definition ---
 const feeStructure = [
@@ -19,7 +19,7 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
     const endDate = startOfMonth(parse(endDateStr, 'yyyy-MM-dd', new Date()));
     let totalDues = 0;
 
-    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    if (!isValid(startDate) || !isValid(endDate)) {
         console.error(`Invalid date found. Start: ${startDateStr}, End: ${endDateStr}`);
         return 0;
     }
@@ -45,7 +45,7 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
 }
 
 
-// --- *** FINAL, SMARTEST CSV IMPORT ACTION V3 *** ---
+// --- CSV IMPORT ACTION ---
 export async function importUsersFromCsvAction(csvData: string) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
@@ -59,8 +59,8 @@ export async function importUsersFromCsvAction(csvData: string) {
     
     const requiredHeaders = ['email', 'joining_date'];
     for (const requiredHeader of requiredHeaders) {
-        if (!headers.includes(requiredHeader) && !headers.includes(requiredHeader.replace(/_/g, ' '))) {
-            return { success: false, message: `CSV file is missing the required header: "${requiredHeader}".`, errors: [`Header "${requiredHeader}" not found.`] };
+        if (!headers.map(h => h.replace(/\s+/g, '_')).includes(requiredHeader)) {
+             return { success: false, message: `CSV file is missing the required header: "${requiredHeader}".`, errors: [`Header "${requiredHeader}" not found.`] };
         }
     }
 
@@ -95,13 +95,14 @@ export async function importUsersFromCsvAction(csvData: string) {
             
             const totalDuesToDate = calculateDuesForPeriod(joining_date, todayStr);
             
-            // *** THE FINAL FIX ***
-            // Explicitly check for a non-empty string before parsing the date.
-            const lastPaymentDate = (last_payment_month && last_payment_month.trim() !== '')
-                ? lastDayOfMonth(parse(last_payment_month, 'yyyy-MM', new Date())).toISOString().split('T')[0] 
-                : null;
-                
-            const totalPaid = lastPaymentDate ? calculateDuesForPeriod(joining_date, lastPaymentDate) : 0;
+            let totalPaid = 0;
+            if (last_payment_month && last_payment_month.trim() !== '') {
+                const lastDayOfPaidMonth = lastDayOfMonth(parse(last_payment_month, 'yyyy-MM', new Date()));
+                if (isValid(lastDayOfPaidMonth)) {
+                    const lastPaymentDateStr = lastDayOfPaidMonth.toISOString().split('T')[0];
+                    totalPaid = calculateDuesForPeriod(joining_date, lastPaymentDateStr);
+                }
+            }
             
             const pending = (totalDuesToDate + admissionFeeNum + miscDuesNum) - totalPaid;
 
