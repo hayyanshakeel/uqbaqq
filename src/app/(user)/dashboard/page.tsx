@@ -3,12 +3,12 @@
 import { useEffect, useState, Suspense } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, firebaseError } from '@/lib/firebase';
-import { getUserDashboardData, UserDashboardData, PaymentHistoryItem, createPaymentLink } from './actions';
+import { getUserDashboardData, UserDashboardData, PaymentHistoryItem, createPaymentLink, createPaymentLinkForBill, Bill } from './actions';
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ArrowRight, CheckCircle, Clock, Loader2, Download } from "lucide-react"; // Import Download icon
+import { ArrowRight, CheckCircle, Clock, Loader2, Download, FileText } from "lucide-react";
 import { Skeleton } from '@/components/ui/skeleton';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
@@ -18,9 +18,9 @@ function Dashboard() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
 
-  const [dashboardData, setDashboardData] = useState<{user: UserDashboardData, paymentHistory: PaymentHistoryItem[]} | null>(null);
+  const [dashboardData, setDashboardData] = useState<{user: UserDashboardData, paymentHistory: PaymentHistoryItem[], pendingBills: Bill[]} | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isPaying, setIsPaying] = useState(false);
+  const [isPaying, setIsPaying] = useState<string | boolean>(false); // Can be true, false, or a billId
   const [isVerifying, setIsVerifying] = useState(false);
 
   const refreshDashboardData = async (userId: string) => {
@@ -67,7 +67,6 @@ function Dashboard() {
     return () => unsubscribe();
   }, [router, searchParams, toast]);
 
-  // Function to generate and open the receipt
   const handleDownloadReceipt = (payment: PaymentHistoryItem, userName: string) => {
     const receiptContent = `
       <html>
@@ -128,11 +127,15 @@ function Dashboard() {
     receiptWindow?.focus();
   };
 
-  const handlePayNow = async () => {
+  const handlePay = async (billId: string | null = null) => {
     if (!auth || !auth.currentUser) return;
-    setIsPaying(true);
+    setIsPaying(billId || true);
+    
     try {
-      const result = await createPaymentLink(auth.currentUser.uid);
+      const result = billId 
+        ? await createPaymentLinkForBill(auth.currentUser.uid, billId)
+        : await createPaymentLink(auth.currentUser.uid);
+
       if (result.success && result.url) {
         window.location.href = result.url;
       } else {
@@ -177,7 +180,7 @@ function Dashboard() {
     );
   }
   
-  const { user: userData, paymentHistory } = dashboardData;
+  const { user: userData, paymentHistory, pendingBills } = dashboardData;
   const hasPendingPayment = userData.pending > 0;
 
   return (
@@ -196,8 +199,42 @@ function Dashboard() {
           <CardContent><div className={`text-3xl font-bold ${hasPendingPayment ? 'text-destructive' : ''}`}>₹{userData.pending.toFixed(2)}</div><p className="text-xs text-muted-foreground">{hasPendingPayment ? "Please clear your dues." : "All dues are clear."}</p></CardContent>
         </Card>
       </div>
+      {hasPendingPayment && (
+          <Card className='mb-8'>
+            <CardHeader><CardTitle>Pending Bills</CardTitle><p className="text-sm text-muted-foreground">You can pay for individual bills below.</p></CardHeader>
+            <CardContent>
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Date</TableHead>
+                            <TableHead>Description</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                            <TableHead className="text-right">Action</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {pendingBills.map(bill => (
+                            <TableRow key={bill.id}>
+                                <TableCell>{bill.date}</TableCell>
+                                <TableCell className="font-medium">{bill.notes}</TableCell>
+                                <TableCell className="text-right font-semibold">₹{bill.amount.toFixed(2)}</TableCell>
+                                <TableCell className="text-right">
+                                    <Button onClick={() => handlePay(bill.id)} disabled={!!isPaying} size="sm">
+                                        {isPaying === bill.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}
+                                        Pay
+                                    </Button>
+                                </TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
+            </CardContent>
+             <CardFooter className="border-t px-6 py-4 bg-muted/20"><div className="flex justify-between items-center w-full"><p className="text-muted-foreground font-medium">Or pay the total outstanding amount.</p><Button onClick={() => handlePay(null)} disabled={!!isPaying}>{isPaying === true && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Pay Total<ArrowRight className="ml-2 h-4 w-4" /></Button></div></CardFooter>
+          </Card>
+      )}
+
       <Card>
-        <CardHeader><CardTitle>Payment History</CardTitle><p className="text-sm text-muted-foreground">A record of your payments.</p></CardHeader>
+        <CardHeader><CardTitle>Payment History</CardTitle><p className="text-sm text-muted-foreground">A record of your past payments.</p></CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
@@ -210,7 +247,6 @@ function Dashboard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {hasPendingPayment && (<TableRow className='bg-destructive/5'><TableCell className="font-medium">-</TableCell><TableCell>Outstanding Dues</TableCell><TableCell><Badge variant="destructive">Pending</Badge></TableCell><TableCell className="text-right font-semibold">₹{userData.pending.toFixed(2)}</TableCell><TableCell></TableCell></TableRow>)}
               {paymentHistory.map((payment) => (<TableRow key={payment.id}><TableCell>{payment.date}</TableCell><TableCell className="font-medium">{payment.notes}</TableCell><TableCell><Badge variant='default' className='bg-green-600'>Paid</Badge></TableCell><TableCell className="text-right">₹{payment.amount.toFixed(2)}</TableCell>
                 <TableCell className="text-right">
                     <Button variant="outline" size="icon" onClick={() => handleDownloadReceipt(payment, userData.name)}>
@@ -219,11 +255,10 @@ function Dashboard() {
                     </Button>
                 </TableCell>
               </TableRow>))}
-              {!hasPendingPayment && paymentHistory.length === 0 && (<TableRow><TableCell colSpan={5} className="text-center h-24">No payment history found.</TableCell></TableRow>)}
+              {paymentHistory.length === 0 && (<TableRow><TableCell colSpan={5} className="text-center h-24">No payment history found.</TableCell></TableRow>)}
             </TableBody>
           </Table>
         </CardContent>
-        {hasPendingPayment && (<CardFooter className="border-t px-6 py-4 bg-muted/20"><div className="flex justify-between items-center w-full"><p className="text-muted-foreground font-medium">You have a pending payment.</p><Button onClick={handlePayNow} disabled={isPaying}>{isPaying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Pay Now<ArrowRight className="ml-2 h-4 w-4" /></Button></div></CardFooter>)}
       </Card>
     </div>
   );
