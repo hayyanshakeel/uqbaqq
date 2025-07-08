@@ -48,6 +48,9 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
             pending: userData.pending || 0,
         };
         
+        // If there's a pending amount but no specific bills are listed,
+        // create a summary bill entry. This makes it clear to the user
+        // that they have an outstanding balance.
         if (user.pending > 0 && pendingBills.length === 0) {
             pendingBills.push({
                 id: 'outstanding-total',
