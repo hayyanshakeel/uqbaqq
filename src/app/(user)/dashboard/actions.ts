@@ -3,6 +3,8 @@
 import { getAdminDb } from '@/lib/firebase-admin';
 import { format } from 'date-fns';
 import Razorpay from 'razorpay';
+import { getPendingBillsForUser, Bill } from '@/lib/data-service';
+
 
 export interface UserDashboardData {
     name: string;
@@ -15,11 +17,11 @@ export interface PaymentHistoryItem {
     amount: number;
     date: string;
     notes: string;
-    // Add the payment ID field to be passed to the UI
     razorpay_payment_id?: string;
 }
 
-export async function getUserDashboardData(userId: string): Promise<{user: UserDashboardData, paymentHistory: PaymentHistoryItem[]} | null> {
+
+export async function getUserDashboardData(userId: string): Promise<{user: UserDashboardData, paymentHistory: PaymentHistoryItem[], pendingBills: Bill[]} | null> {
     if (!userId) return null;
     const adminDb = getAdminDb();
 
@@ -27,9 +29,10 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
         const userRef = adminDb.collection('users').doc(userId);
         const paymentsRef = adminDb.collection('payments').where('userId', '==', userId);
 
-        const [userDoc, paymentsSnapshot] = await Promise.all([
+        const [userDoc, paymentsSnapshot, pendingBills] = await Promise.all([
             userRef.get(),
-            paymentsRef.get()
+            paymentsRef.get(),
+            getPendingBillsForUser(userId)
         ]);
 
         if (!userDoc.exists) {
@@ -65,7 +68,6 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
                 amount: data.amount || 0,
                 date: paymentDate,
                 notes: data.notes || '',
-                // Get the payment ID from the document data
                 razorpay_payment_id: data.razorpay_payment_id || null, 
             };
         });
@@ -79,12 +81,11 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
                 amount: payment.amount,
                 date: dateString,
                 notes: payment.notes || `Payment on ${dateString}`,
-                // Pass the payment ID to the final array
                 razorpay_payment_id: payment.razorpay_payment_id,
             };
         });
 
-        return { user, paymentHistory };
+        return { user, paymentHistory, pendingBills };
 
     } catch (error) {
         console.error("Error fetching user dashboard data for UID:", userId, error);
@@ -92,23 +93,10 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
     }
 }
 
-
-export async function createPaymentLink(userId: string) {
+async function createRazorpayLink(options: any) {
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
         console.error('Razorpay API keys are not configured.');
         return { success: false, message: 'Payment processing is currently unavailable.' };
-    }
-    const adminDb = getAdminDb();
-    
-    const userDoc = await adminDb.collection('users').doc(userId).get();
-    if (!userDoc.exists) {
-        return { success: false, message: 'User not found.' };
-    }
-    const userData = userDoc.data()!;
-    const pendingAmount = userData.pending || 0;
-
-    if (pendingAmount <= 0) {
-        return { success: false, message: 'You have no pending amount to pay.' };
     }
 
     const instance = new Razorpay({
@@ -116,35 +104,74 @@ export async function createPaymentLink(userId: string) {
         key_secret: process.env.RAZORPAY_KEY_SECRET,
     });
 
-    const amountInPaisa = Math.round(pendingAmount * 100);
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
-
     try {
-        const paymentLink = await instance.paymentLink.create({
-            amount: amountInPaisa,
-            currency: "INR",
-            accept_partial: false,
-            description: "UQBA COMMITTEE Monthly Dues",
-            customer: {
-                name: userData.name,
-                email: userData.email,
-                contact: userData.phone,
-            },
-            notify: {
-                sms: true,
-                email: true,
-            },
-            reminder_enable: true,
-            notes: {
-                userId: userId,
-            },
-            callback_url: `${appUrl}/dashboard`,
-            callback_method: "get"
-        });
-
+        const paymentLink = await instance.paymentLink.create(options);
         return { success: true, url: paymentLink.short_url };
     } catch (error) {
         console.error('Error creating Razorpay payment link:', error);
         return { success: false, message: 'Could not initiate payment. Please try again later.' };
     }
+}
+
+
+export async function createPaymentLink(userId: string) {
+    const adminDb = getAdminDb();
+    const userDoc = await adminDb.collection('users').doc(userId).get();
+    if (!userDoc.exists) return { success: false, message: 'User not found.' };
+    
+    const userData = userDoc.data()!;
+    const pendingAmount = userData.pending || 0;
+    if (pendingAmount <= 0) return { success: false, message: 'You have no pending amount to pay.' };
+
+    const amountInPaisa = Math.round(pendingAmount * 100);
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
+
+    return createRazorpayLink({
+        amount: amountInPaisa,
+        currency: "INR",
+        accept_partial: false,
+        description: "UQBA COMMITTEE - Total Dues",
+        customer: { name: userData.name, email: userData.email, contact: userData.phone },
+        notify: { sms: true, email: true },
+        reminder_enable: true,
+        notes: { userId: userId, type: 'total_due' },
+        callback_url: `${appUrl}/dashboard`,
+        callback_method: "get"
+    });
+}
+
+export async function createPaymentLinkForBill(userId: string, billId: string) {
+    const adminDb = getAdminDb();
+
+    const [userDoc, billDoc] = await Promise.all([
+        adminDb.collection('users').doc(userId).get(),
+        adminDb.collection('bills').doc(billId).get()
+    ]);
+
+    if (!userDoc.exists() || !billDoc.exists()) {
+        return { success: false, message: 'User or bill not found.' };
+    }
+
+    const userData = userDoc.data()!;
+    const billData = billDoc.data()!;
+    const billAmount = billData.amount || 0;
+
+    if (billAmount <= 0) {
+        return { success: false, message: 'This bill has no amount due.' };
+    }
+
+    const amountInPaisa = Math.round(billAmount * 100);
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
+
+    return createRazorpayLink({
+        amount: amountInPaisa,
+        currency: "INR",
+        accept_partial: false,
+        description: billData.notes || `Payment for Bill`,
+        customer: { name: userData.name, email: userData.email, contact: userData.phone },
+        notify: { sms: true, email: true },
+        notes: { userId: userId, billId: billId, type: 'single_bill' },
+        callback_url: `${appUrl}/dashboard`,
+        callback_method: "get"
+    });
 }
