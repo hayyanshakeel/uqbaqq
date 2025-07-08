@@ -3,7 +3,7 @@
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
 import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid, format } from 'date-fns';
-import { getBillingSettings } from '@/app/(admin)/admin/settings/actions'; // CORRECTED PATH
+import { getBillingSettings } from '@/app/(admin)/admin/settings/actions';
 import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 import * as admin from 'firebase-admin';
 
@@ -514,7 +514,8 @@ export async function getPendingMonthsForUser(userId: string): Promise<string> {
         return 'Error fetching';
     }
 }
-// --- NEW FUNCTION TO SPLIT A BILL ACROSS MONTHS ---
+
+// --- CORRECTED FUNCTION TO SPLIT A BILL ACROSS MONTHS ---
 export async function splitMissedBillAction(formData: FormData) {
     const adminDb = getAdminDb();
     const userId = formData.get('userId') as string;
@@ -527,8 +528,8 @@ export async function splitMissedBillAction(formData: FormData) {
     }
 
     try {
-        const startDate = startOfMonth(new Date(startMonthStr));
-        const endDate = startOfMonth(new Date(endMonthStr));
+        const startDate = startOfMonth(new Date(`${startMonthStr}-01T12:00:00Z`));
+        const endDate = startOfMonth(new Date(`${endMonthStr}-01T12:00:00Z`));
         
         if (startDate > endDate) {
             return { success: false, message: 'Start month must be before or same as end month.' };
@@ -539,18 +540,29 @@ export async function splitMissedBillAction(formData: FormData) {
             return { success: false, message: 'Invalid month range.' };
         }
 
-        const amountPerMonth = parseFloat((totalAmount / numberOfMonths).toFixed(2));
+        // Use integer math for cents to avoid floating point issues
+        const totalAmountInCents = Math.round(totalAmount * 100);
+        const amountPerMonthInCents = Math.floor(totalAmountInCents / numberOfMonths);
+        let remainderInCents = totalAmountInCents % numberOfMonths;
         
         const batch = adminDb.batch();
 
         for (let i = 0; i < numberOfMonths; i++) {
             const billingDate = addMonths(startDate, i);
             const billRef = adminDb.collection('bills').doc();
+
+            // Distribute the remainder cents across the first few months
+            let currentMonthAmountInCents = amountPerMonthInCents;
+            if (remainderInCents > 0) {
+                currentMonthAmountInCents++;
+                remainderInCents--;
+            }
+            
             batch.set(billRef, {
                 userId,
-                amount: amountPerMonth,
+                amount: currentMonthAmountInCents / 100, // Convert back to float for storage
                 dueDate: billingDate,
-                notes: `Bill for ${format(billingDate, 'MMMM<y_bin_46>')}`,
+                notes: `Bill for ${format(billingDate, 'MMMM yyyy')}`,
                 status: 'pending',
                 createdAt: new Date()
             });
@@ -571,6 +583,6 @@ export async function splitMissedBillAction(formData: FormData) {
         return { success: true, message: `Successfully split ₹${totalAmount} into ${numberOfMonths} bills.` };
     } catch (error: any) {
         console.error('Error splitting bill:', error);
-        return { success: false, message: 'Failed to split bill.' };
+        return { success: false, message: error.message || 'An unexpected error occurred while splitting the bill.' };
     }
 }
