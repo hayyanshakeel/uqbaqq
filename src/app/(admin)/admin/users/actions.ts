@@ -2,9 +2,10 @@
 
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
-import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid } from 'date-fns';
-import { getBillingSettings } from '../settings/actions';
+import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid, format } from 'date-fns';
+import { getBillingSettings } from '@/app/(admin)/admin/settings/actions'; // CORRECTED PATH
 import { createPaymentLink } from '@/app/(user)/dashboard/actions';
+import * as admin from 'firebase-admin';
 
 // --- Fee Structure Definition ---
 const feeStructure = [
@@ -482,5 +483,94 @@ export async function reverseLastBillAction(userId: string) {
         console.error('Error reversing bill:', error);
         const message = error instanceof Error ? error.message : 'Failed to reverse bill.';
         return { success: false, message };
+    }
+}
+
+// --- NEW FUNCTION for CSV Export ---
+export async function getPendingMonthsForUser(userId: string): Promise<string> {
+    if (!userId) return 'N/A';
+    const adminDb = getAdminDb();
+    try {
+        const billsSnapshot = await adminDb.collection('bills')
+            .where('userId', '==', userId)
+            .where('status', '==', 'pending')
+            .orderBy('dueDate', 'asc')
+            .get();
+
+        if (billsSnapshot.empty) {
+            return 'None';
+        }
+
+        const months = billsSnapshot.docs.map(doc => {
+            const data = doc.data();
+            const dueDate = data.dueDate.toDate(); // Convert Firestore Timestamp
+            return format(dueDate, 'MMM-yy'); // e.g., "Jul-25"
+        });
+
+        return months.join(', '); // e.g., "May-25, Jun-25, Jul-25"
+
+    } catch (error) {
+        console.error(`Error fetching pending months for user ${userId}:`, error);
+        return 'Error fetching';
+    }
+}
+// --- NEW FUNCTION TO SPLIT A BILL ACROSS MONTHS ---
+export async function splitMissedBillAction(formData: FormData) {
+    const adminDb = getAdminDb();
+    const userId = formData.get('userId') as string;
+    const totalAmount = parseFloat(formData.get('totalAmount') as string);
+    const startMonthStr = formData.get('startMonth') as string; // "2025-01"
+    const endMonthStr = formData.get('endMonth') as string; // "2025-04"
+
+    if (!userId || isNaN(totalAmount) || totalAmount <= 0 || !startMonthStr || !endMonthStr) {
+        return { success: false, message: 'Invalid data provided. Please fill all fields correctly.' };
+    }
+
+    try {
+        const startDate = startOfMonth(new Date(startMonthStr));
+        const endDate = startOfMonth(new Date(endMonthStr));
+        
+        if (startDate > endDate) {
+            return { success: false, message: 'Start month must be before or same as end month.' };
+        }
+
+        const numberOfMonths = differenceInMonths(endDate, startDate) + 1;
+        if (numberOfMonths <= 0) {
+            return { success: false, message: 'Invalid month range.' };
+        }
+
+        const amountPerMonth = parseFloat((totalAmount / numberOfMonths).toFixed(2));
+        
+        const batch = adminDb.batch();
+
+        for (let i = 0; i < numberOfMonths; i++) {
+            const billingDate = addMonths(startDate, i);
+            const billRef = adminDb.collection('bills').doc();
+            batch.set(billRef, {
+                userId,
+                amount: amountPerMonth,
+                dueDate: billingDate,
+                notes: `Bill for ${format(billingDate, 'MMMM yyyy')}`,
+                status: 'pending',
+                createdAt: new Date()
+            });
+        }
+
+        const userRef = adminDb.collection('users').doc(userId);
+        batch.update(userRef, {
+            pending: admin.firestore.FieldValue.increment(totalAmount),
+            status: 'pending'
+        });
+
+        await batch.commit();
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+        revalidatePath('/dashboard');
+
+        return { success: true, message: `Successfully split ₹${totalAmount} into ${numberOfMonths} bills.` };
+    } catch (error: any) {
+        console.error('Error splitting bill:', error);
+        return { success: false, message: 'Failed to split bill.' };
     }
 }
