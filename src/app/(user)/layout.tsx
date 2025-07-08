@@ -1,7 +1,19 @@
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import Link from "next/link";
-import { Logo } from "@/components/logo";
+
+// The Logo component is causing the issue in this specific layout.
+// We will replace it with simple text for now to fix the crash.
+function UserLogo() {
+  return (
+    <h1
+      className="whitespace-nowrap text-xl sm:text-2xl md:text-3xl font-headline font-bold bg-clip-text text-transparent bg-gradient-to-r from-teal-400 via-purple-500 to-blue-500 animate-gradient-flow [background-size:200%_200%]"
+    >
+      UQBA COMMITTEE
+    </h1>
+  );
+}
+
 
 export default function UserLayout({
     children,
@@ -13,7 +25,7 @@ export default function UserLayout({
             <header className="sticky top-0 z-40 w-full border-b bg-card">
                 <div className="container relative flex h-16 items-center">
                     <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-                        <Logo />
+                        <UserLogo />
                     </div>
                     <div className="ml-auto flex items-center justify-end space-x-4">
                         <nav className="flex items-center space-x-1">
