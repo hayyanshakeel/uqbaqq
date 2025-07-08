@@ -20,7 +20,7 @@ function Dashboard() {
 
   const [dashboardData, setDashboardData] = useState<{user: UserDashboardData, paymentHistory: PaymentHistoryItem[], pendingBills: Bill[]} | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isPaying, setIsPaying] = useState<string | boolean>(false); // Can be true (for total), false, or a billId
+  const [isPaying, setIsPaying] = useState<string | boolean>(false);
   const [isVerifying, setIsVerifying] = useState(false);
 
   const refreshDashboardData = async (userId: string) => {
@@ -82,21 +82,7 @@ function Dashboard() {
             .detail-item span:last-child { font-weight: 600; text-align: right; }
             .total { font-size: 1.25rem; font-weight: bold; text-align: right; margin-top: 1.5rem; }
             .footer { text-align: center; margin-top: 2rem; font-size: 0.875rem; color: #6b7281; }
-            .paid-stamp {
-              position: absolute;
-              top: 90px;
-              right: -50px;
-              font-size: 3rem;
-              font-weight: bold;
-              color: #16a34a;
-              border: 5px solid #16a34a;
-              padding: 0.5rem 2rem;
-              transform: rotate(-30deg);
-              opacity: 0.15;
-              text-transform: uppercase;
-              z-index: 1;
-              pointer-events: none;
-            }
+            .paid-stamp { position: absolute; top: 90px; right: -50px; font-size: 3rem; font-weight: bold; color: #16a34a; border: 5px solid #16a34a; padding: 0.5rem 2rem; transform: rotate(-30deg); opacity: 0.15; text-transform: uppercase; z-index: 1; pointer-events: none; }
           </style>
         </head>
         <body>
@@ -114,9 +100,7 @@ function Dashboard() {
               <span>Amount Paid:</span>
               <span>₹${payment.amount.toFixed(2)}</span>
             </div>
-            <div class="footer">
-              Thank you for your contribution.
-            </div>
+            <div class="footer"> Thank you for your contribution. </div>
           </div>
         </body>
       </html>
@@ -189,6 +173,7 @@ function Dashboard() {
         <h1 className="text-3xl font-headline font-bold text-foreground">Assalamu Alaikum, {userData.name}</h1>
         <p className="text-muted-foreground">Welcome to your welfare dashboard. Here's your payment summary.</p>
       </div>
+
       <div className="grid gap-4 md:grid-cols-2 mb-8">
         <Card className="border-green-500/50 border-2 shadow-lg">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium">Total Paid</CardTitle><CheckCircle className="h-5 w-5 text-green-500" /></CardHeader>
@@ -239,7 +224,7 @@ function Dashboard() {
             </CardContent>
              <CardFooter className="border-t px-6 py-4 bg-muted/20">
                 <div className="flex justify-between items-center w-full">
-                    <p className="text-muted-foreground font-medium">Pay the total outstanding amount.</p>
+                    <p className="text-muted-foreground font-medium">Or pay the total outstanding amount.</p>
                     <Button onClick={() => handlePay(null)} disabled={!!isPaying}>
                         {isPaying === true && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                         Pay Total (₹{userData.pending.toFixed(2)})
