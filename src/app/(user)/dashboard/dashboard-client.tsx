@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +20,7 @@ interface DashboardClientProps {
 }
 
 export default function DashboardClient({ dashboardData, userId }: DashboardClientProps) {
+    const router = useRouter();
     const [isLoading, setIsLoading] = useState(false);
     const [loadingBillId, setLoadingBillId] = useState<string | null>(null);
     const [loadingReceiptId, setLoadingReceiptId] = useState<string | null>(null);
@@ -58,15 +60,28 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
         }
     };
     
-    const handleViewReceipt = async (paymentId: string) => {
-        setLoadingReceiptId(paymentId);
+    const handleViewReceipt = async (payment: PaymentHistoryItem) => {
+        // Use the unique payment document ID for loading state
+        setLoadingReceiptId(payment.id); 
         try {
-            const result = await getReceiptUrl(paymentId);
-            if (result.success && result.url) {
-                window.open(result.url, '_blank');
-            } else {
-                alert(result.message || 'Could not retrieve receipt.');
+            // If it's a Razorpay payment and has a direct URL, use it.
+            if (payment.receipt_url) {
+                window.open(payment.receipt_url, '_blank');
+                return; 
             }
+            // If it's a Razorpay payment without a stored URL, fetch it.
+            if (payment.razorpay_payment_id) {
+                 const result = await getReceiptUrl(payment.razorpay_payment_id);
+                if (result.success && result.url) {
+                    window.open(result.url, '_blank');
+                } else {
+                    alert(result.message || 'Could not retrieve Razorpay receipt.');
+                }
+                return;
+            }
+            // Otherwise, it's a manual payment, so navigate to our internal receipt page.
+            router.push(`/receipt/${payment.id}`);
+
         } catch (error) {
             console.error('Receipt error:', error);
             alert('An error occurred while fetching the receipt.');
@@ -195,21 +210,20 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
                                         <Badge variant="secondary">
                                             ₹{payment.amount.toLocaleString()}
                                         </Badge>
-                                        {payment.razorpay_payment_id && (
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={() => handleViewReceipt(payment.razorpay_payment_id!)}
-                                                disabled={loadingReceiptId === payment.razorpay_payment_id}
-                                            >
-                                                {loadingReceiptId === payment.razorpay_payment_id ? (
-                                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                                ) : (
-                                                    <Receipt className="h-4 w-4" />
-                                                )}
-                                                <span className="ml-2 hidden sm:inline">Receipt</span>
-                                            </Button>
-                                        )}
+                                        {/* This button will now show for ALL payments */}
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => handleViewReceipt(payment)}
+                                            disabled={loadingReceiptId === payment.id}
+                                        >
+                                            {loadingReceiptId === payment.id ? (
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                                <Receipt className="h-4 w-4" />
+                                            )}
+                                            <span className="ml-2 hidden sm:inline">Receipt</span>
+                                        </Button>
                                     </div>
                                 </div>
                             ))}
