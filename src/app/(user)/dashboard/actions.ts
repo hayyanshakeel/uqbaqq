@@ -96,82 +96,86 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
 async function createRazorpayLink(options: any) {
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
         console.error('Razorpay API keys are not configured.');
-        return { success: false, message: 'Payment processing is currently unavailable.' };
+        return { success: false, message: 'Payment processing is currently unavailable. Check server configuration.' };
     }
 
     const instance = new Razorpay({
         key_id: process.env.RAZORPAY_KEY_ID,
         key_secret: process.env.RAZORPAY_KEY_SECRET,
     });
-
-    try {
-        const paymentLink = await instance.paymentLink.create(options);
-        return { success: true, url: paymentLink.short_url };
-    } catch (error) {
-        console.error('Error creating Razorpay payment link:', error);
-        return { success: false, message: 'Could not initiate payment. Please try again later.' };
-    }
+    
+    const paymentLink = await instance.paymentLink.create(options);
+    return { success: true, url: paymentLink.short_url };
 }
 
-
 export async function createPaymentLink(userId: string) {
-    const adminDb = getAdminDb();
-    const userDoc = await adminDb.collection('users').doc(userId).get();
-    if (!userDoc.exists) return { success: false, message: 'User not found.' };
+    try {
+        const adminDb = getAdminDb();
+        const userDoc = await adminDb.collection('users').doc(userId).get();
+        if (!userDoc.exists) return { success: false, message: 'User not found.' };
+        
+        const userData = userDoc.data()!;
+        const pendingAmount = userData.pending || 0;
+        if (pendingAmount <= 0) return { success: false, message: 'You have no pending amount to pay.' };
     
-    const userData = userDoc.data()!;
-    const pendingAmount = userData.pending || 0;
-    if (pendingAmount <= 0) return { success: false, message: 'You have no pending amount to pay.' };
-
-    const amountInPaisa = Math.round(pendingAmount * 100);
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
-
-    return createRazorpayLink({
-        amount: amountInPaisa,
-        currency: "INR",
-        accept_partial: false,
-        description: "UQBA COMMITTEE - Total Dues",
-        customer: { name: userData.name, email: userData.email, contact: userData.phone },
-        notify: { sms: true, email: true },
-        reminder_enable: true,
-        notes: { userId: userId, type: 'total_due' },
-        callback_url: `${appUrl}/dashboard`,
-        callback_method: "get"
-    });
+        const amountInPaisa = Math.round(pendingAmount * 100);
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
+    
+        return createRazorpayLink({
+            amount: amountInPaisa,
+            currency: "INR",
+            accept_partial: false,
+            description: "UQBA COMMITTEE - Total Dues",
+            customer: { name: userData.name, email: userData.email, contact: userData.phone },
+            notify: { sms: true, email: true },
+            reminder_enable: true,
+            notes: { userId: userId, type: 'total_due' },
+            callback_url: `${appUrl}/dashboard`,
+            callback_method: "get"
+        });
+    } catch (error: any) {
+        console.error('Error creating total payment link:', error);
+        return { success: false, message: error.message || 'Could not initiate total payment.' };
+    }
 }
 
 export async function createPaymentLinkForBill(userId: string, billId: string) {
-    const adminDb = getAdminDb();
+    try {
+        const adminDb = getAdminDb();
 
-    const [userDoc, billDoc] = await Promise.all([
-        adminDb.collection('users').doc(userId).get(),
-        adminDb.collection('bills').doc(billId).get()
-    ]);
-
-    if (!userDoc.exists() || !billDoc.exists()) {
-        return { success: false, message: 'User or bill not found.' };
+        const [userDoc, billDoc] = await Promise.all([
+            adminDb.collection('users').doc(userId).get(),
+            adminDb.collection('bills').doc(billId).get()
+        ]);
+    
+        if (!userDoc.exists() || !billDoc.exists()) {
+            return { success: false, message: 'User or bill not found.' };
+        }
+    
+        const userData = userDoc.data()!;
+        const billData = billDoc.data()!;
+        const billAmount = billData.amount || 0;
+    
+        if (billAmount <= 0) {
+            return { success: false, message: 'This bill has no amount due.' };
+        }
+    
+        const amountInPaisa = Math.round(billAmount * 100);
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
+    
+        return createRazorpayLink({
+            amount: amountInPaisa,
+            currency: "INR",
+            accept_partial: false,
+            description: billData.notes || `Payment for Bill`,
+            customer: { name: userData.name, email: userData.email, contact: userData.phone },
+            notify: { sms: true, email: true },
+            notes: { userId: userId, billId: billId, type: 'single_bill' },
+            callback_url: `${appUrl}/dashboard`,
+            callback_method: "get"
+        });
+    } catch (error: any) {
+        console.error('Error creating single bill payment link:', error);
+        return { success: false, message: error.message || 'Could not initiate payment for this bill.' };
     }
-
-    const userData = userDoc.data()!;
-    const billData = billDoc.data()!;
-    const billAmount = billData.amount || 0;
-
-    if (billAmount <= 0) {
-        return { success: false, message: 'This bill has no amount due.' };
-    }
-
-    const amountInPaisa = Math.round(billAmount * 100);
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
-
-    return createRazorpayLink({
-        amount: amountInPaisa,
-        currency: "INR",
-        accept_partial: false,
-        description: billData.notes || `Payment for Bill`,
-        customer: { name: userData.name, email: userData.email, contact: userData.phone },
-        notify: { sms: true, email: true },
-        notes: { userId: userId, billId: billId, type: 'single_bill' },
-        callback_url: `${appUrl}/dashboard`,
-        callback_method: "get"
-    });
 }
