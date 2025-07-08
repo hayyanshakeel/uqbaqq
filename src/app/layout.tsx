@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 export const metadata: Metadata = {
   title: 'UQBA COMMITTEE',
   description: 'Welfare Committee Management App',
-  manifest: '/manifest.json',
+  manifest: '/icons/manifest.json', // Corrected path
   icons: {
     icon: '/favicon.ico',
     apple: '/apple-touch-icon.png', // The file should be directly in /public
