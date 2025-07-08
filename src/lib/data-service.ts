@@ -16,6 +16,14 @@ export interface User {
     pending: number;
 }
 
+export interface Bill {
+    id: string;
+    amount: number;
+    date: string;
+    notes: string;
+}
+
+
 export interface Expense {
     id: string;
     date: string; // ISO string
@@ -184,4 +192,37 @@ export async function getAllExpenditures(): Promise<Expense[]> {
             category: data.category || 'General',
         };
     });
+}
+export async function getPendingBillsForUser(userId: string): Promise<Bill[]> {
+    if (!userId) return [];
+    const adminDb = getAdminDb();
+
+    try {
+        const billsSnapshot = await adminDb.collection('bills')
+            .where('userId', '==', userId)
+            .where('status', '==', 'pending')
+            .orderBy('dueDate', 'asc')
+            .get();
+
+        if (billsSnapshot.empty) {
+            return [];
+        }
+
+        return billsSnapshot.docs.map(doc => {
+            const data = doc.data();
+            const dueDate = data.dueDate instanceof admin.firestore.Timestamp
+                ? data.dueDate.toDate()
+                : new Date(data.dueDate);
+
+            return {
+                id: doc.id,
+                amount: data.amount || 0,
+                date: format(dueDate, 'dd/MM/yyyy'),
+                notes: data.notes || `Bill for ${format(dueDate, 'MMMM yyyy')}`,
+            };
+        });
+    } catch (error) {
+        console.error("Error fetching pending bills for user:", userId, error);
+        return [];
+    }
 }
