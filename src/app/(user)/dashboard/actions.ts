@@ -48,9 +48,6 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
             pending: userData.pending || 0,
         };
         
-        // If there's a pending amount but no specific bills are listed,
-        // create a summary bill entry. This makes it clear to the user
-        // that they have an outstanding balance.
         if (user.pending > 0 && pendingBills.length === 0) {
             pendingBills.push({
                 id: 'outstanding-total',
@@ -196,5 +193,36 @@ export async function createPaymentLinkForBill(userId: string, billId: string) {
     } catch (error: any) {
         console.error('Error creating single bill payment link:', error);
         return { success: false, message: error.message || 'Could not initiate payment for this bill.' };
+    }
+}
+
+// New function to get the receipt URL from Razorpay
+export async function getReceiptUrl(paymentId: string): Promise<{ success: boolean; url?: string; message?: string }> {
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+        return { success: false, message: 'Payment processing is currently unavailable.' };
+    }
+
+    try {
+        const instance = new Razorpay({
+            key_id: process.env.RAZORPAY_KEY_ID,
+            key_secret: process.env.RAZORPAY_KEY_SECRET,
+        });
+
+        // The public receipt URL is available on the payment entity
+        const payment = await instance.payments.fetch(paymentId);
+        
+        // Razorpay often includes the receipt URL in the notes of the payment link
+        if (payment && payment.payment_link_id) {
+            const paymentLink = await instance.paymentLink.fetch(payment.payment_link_id);
+             if (paymentLink && paymentLink.receipt_url) {
+                return { success: true, url: paymentLink.receipt_url };
+            }
+        }
+        
+        return { success: false, message: 'Receipt not available for this payment.' };
+
+    } catch (error: any) {
+        console.error('Error fetching Razorpay receipt:', error);
+        return { success: false, message: 'Could not fetch receipt.' };
     }
 }
