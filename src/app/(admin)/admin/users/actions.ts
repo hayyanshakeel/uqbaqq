@@ -168,7 +168,7 @@ export async function recordBulkPaymentAction(userId: string, formData: FormData
 }
 
 
-// --- Server Action to Update User Details and Password ---
+// --- Server Action to Update User Details and Password (CORRECTED) ---
 export async function updateUserAction(userId: string, formData: FormData) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
@@ -185,10 +185,13 @@ export async function updateUserAction(userId: string, formData: FormData) {
     try {
         const firestoreUpdatePayload = { name, email, phone };
         
+        // **FIX 1: Format the phone number to E.164 standard**
+        const formattedPhone = phone.startsWith('+') ? phone : `+91${phone}`;
+
         const authUpdatePayload: { displayName: string; email: string; phoneNumber: string; password?: string } = { 
             displayName: name, 
             email, 
-            phoneNumber: phone 
+            phoneNumber: formattedPhone
         };
         
         if (password) {
@@ -205,10 +208,8 @@ export async function updateUserAction(userId: string, formData: FormData) {
         return { success: true, message: 'User details updated successfully.' };
     } catch (error: any) {
         console.error("Error updating user:", error);
-        if (error.code === 'auth/email-already-exists') {
-            return { success: false, message: 'This email address is already in use by another account.' };
-        }
-        return { success: false, message: 'Failed to update user details.' };
+        // **FIX 2: Provide a more detailed error message**
+        return { success: false, message: error.message || 'Failed to update user details.' };
     }
 }
 
