@@ -109,54 +109,61 @@ export async function markAsDeceasedAction(userId: string, formData: FormData) {
 }
 
 export async function recordBulkPaymentAction(userId: string, formData: FormData) {
-    const fromMonth = formData.get('fromMonth') as string;
-    const toMonth = formData.get('toMonth') as string;
+    const fromMonthStr = formData.get('fromMonth') as string;
+    const toMonthStr = formData.get('toMonth') as string;
 
-    if (!userId || !fromMonth || !toMonth) {
+    if (!userId || !fromMonthStr || !toMonthStr) {
         return { success: false, message: 'User ID, From Month, and To Month are required.' };
     }
 
     try {
         const adminDb = getAdminDb();
         const userRef = adminDb.collection('users').doc(userId);
-        const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending');
         
-        const pendingBillsSnapshot = await pendingBillsQuery.get();
+        const startDate = startOfMonth(new Date(`${fromMonthStr}-01T12:00:00Z`));
+        const endDate = lastDayOfMonth(new Date(`${toMonthStr}-01T12:00:00Z`));
+
+        const billsToPayQuery = adminDb.collection('bills')
+            .where('userId', '==', userId)
+            .where('status', '==', 'pending')
+            .where('dueDate', '>=', startDate)
+            .where('dueDate', '<=', endDate);
+
+        const billsToPaySnapshot = await billsToPayQuery.get();
+
+        if (billsToPaySnapshot.empty) {
+            return { success: false, message: 'No pending bills found in the selected date range.' };
+        }
+
+        let totalAmountPaid = 0;
+        billsToPaySnapshot.forEach(doc => {
+            totalAmountPaid += doc.data().amount || 0;
+        });
 
         await adminDb.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) {
-                throw new Error("User not found.");
-            }
+            if (!userDoc.exists) throw new Error('User not found!');
+            
             const userData = userDoc.data()!;
-            const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
-            const todayStr = new Date().toISOString().split('T')[0];
-    
-            const fromDate = `${fromMonth}-01`;
-            const toDate = lastDayOfMonth(parse(toMonth, 'yyyy-MM', new Date())).toISOString().split('T')[0];
-    
-            const totalPaidForRange = calculateDuesForPeriod(fromDate, toDate);
-            const totalDuesToDate = calculateDuesForPeriod(joiningDate, todayStr);
-            const newPending = totalDuesToDate - totalPaidForRange;
-    
+            const newTotalPaid = (userData.totalPaid || 0) + totalAmountPaid;
+            const newPending = (userData.pending || 0) - totalAmountPaid;
+
             transaction.update(userRef, {
-                totalPaid: totalPaidForRange,
+                totalPaid: newTotalPaid,
                 pending: newPending < 0 ? 0 : newPending,
-                status: newPending <= 0 ? 'paid' : 'pending',
+                status: newPending <= 0 ? 'paid' : 'pending'
             });
-    
-            if (newPending <= 0) {
-                pendingBillsSnapshot.docs.forEach(doc => {
-                    transaction.update(doc.ref, { status: 'paid' });
-                });
-            }
+
+            billsToPaySnapshot.docs.forEach(doc => {
+                transaction.update(doc.ref, { status: 'paid' });
+            });
 
             const paymentRef = adminDb.collection('payments').doc();
             transaction.set(paymentRef, {
                 userId,
-                amount: totalPaidForRange,
+                amount: totalAmountPaid,
                 date: new Date(),
-                notes: `Bulk payment recorded for period ${fromMonth} to ${toMonth}.`,
+                notes: `Bulk payment for ${fromMonthStr} to ${toMonthStr}.`,
                 type: 'manual_bulk_record',
                 createdAt: new Date()
             });
@@ -166,10 +173,14 @@ export async function recordBulkPaymentAction(userId: string, formData: FormData
         revalidatePath('/admin/dashboard');
         revalidatePath(`/dashboard`);
 
-        return { success: true, message: `Successfully recorded payments from ${fromMonth} to ${toMonth}.` };
+        return { success: true, message: `Successfully recorded payment of ₹${totalAmountPaid.toFixed(2)} for the selected period.` };
+
     } catch (error: any) {
         console.error("Error in bulk record action:", error);
-        return { success: false, message: error.message };
+        if (error.code === 'failed-precondition') {
+             return { success: false, message: `Database error: This query requires a custom index. Please create a composite index in your Firestore settings for the 'bills' collection on the fields: userId (asc), status (asc), dueDate (asc).` };
+        }
+        return { success: false, message: error.message || 'An unexpected error occurred.' };
     }
 }
 
@@ -515,7 +526,7 @@ export async function getPendingMonthsForUser(userId: string): Promise<string> {
 
         return months.join(', ');
 
-    } catch (error) {
+    } catch (error: any) {
         console.error(`Error fetching pending months for user ${userId}:`, error);
         return 'Error fetching';
     }
