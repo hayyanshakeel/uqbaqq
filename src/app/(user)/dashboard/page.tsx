@@ -1,197 +1,39 @@
-'use server';
+import { redirect } from 'next/navigation';
+import { getUserDashboardData } from './actions';
+import DashboardClient from './dashboard-client';
 
-import { getAdminDb } from '@/lib/firebase-admin';
-import { format } from 'date-fns';
-import Razorpay from 'razorpay';
-import { getPendingBillsForUser, Bill } from '@/lib/data-service';
-
-export interface UserDashboardData {
-    name: string;
-    totalPaid: number;
-    pending: number;
+// You'll need to implement this based on your auth system
+// This is a placeholder - replace with your actual auth check
+async function getCurrentUser() {
+    // Replace this with your actual auth logic
+    // For example, if using cookies:
+    // const { cookies } = require('next/headers');
+    // const userCookie = cookies().get('user');
+    // return userCookie ? JSON.parse(userCookie.value) : null;
+    
+    // For now, returning a mock user - REPLACE THIS
+    return { uid: 'mock-user-id' };
 }
 
-export interface PaymentHistoryItem {
-    id: string;
-    amount: number;
-    date: string;
-    notes: string;
-    razorpay_payment_id?: string;
-}
-
-export async function getUserDashboardData(userId: string): Promise<{user: UserDashboardData, paymentHistory: PaymentHistoryItem[], pendingBills: Bill[]} | null> {
-    if (!userId) {
-        console.error("getUserDashboardData called with no userId.");
-        return null;
-    }
-    const adminDb = getAdminDb();
-
-    try {
-        const userRef = adminDb.collection('users').doc(userId);
-        const paymentsRef = adminDb.collection('payments').where('userId', '==', userId);
-
-        const [userDoc, paymentsSnapshot, pendingBills] = await Promise.all([
-            userRef.get(),
-            paymentsRef.get(),
-            getPendingBillsForUser(userId)
-        ]);
-
-        if (!userDoc.exists) {
-            console.error(`Firestore document not found for user with Auth UID: ${userId}`);
-            return null;
-        }
-
-        const userData = userDoc.data()!;
-        const user: UserDashboardData = {
-            name: userData.name || 'User',
-            totalPaid: userData.totalPaid || 0,
-            pending: userData.pending || 0,
-        };
-        
-        if (user.pending > 0 && pendingBills.length === 0) {
-            pendingBills.push({
-                id: 'outstanding-total',
-                amount: user.pending,
-                date: 'As of today',
-                notes: 'Total Outstanding Dues'
-            });
-        }
-
-        const unsortedPayments = paymentsSnapshot.docs.map(doc => {
-            const data = doc.data();
-            let paymentDate: Date;
-
-            if (data.date && typeof data.date.toDate === 'function') {
-                paymentDate = data.date.toDate();
-            } else if (data.date && (typeof data.date === 'string' || typeof data.date === 'number')) {
-                paymentDate = new Date(data.date);
-            } else {
-                paymentDate = new Date();
-            }
-
-            if (isNaN(paymentDate.getTime())) {
-                paymentDate = new Date();
-            }
-
-            return {
-                id: doc.id,
-                amount: data.amount || 0,
-                date: paymentDate,
-                notes: data.notes || '',
-                razorpay_payment_id: data.razorpay_payment_id || null, 
-            };
-        });
-
-        const sortedPayments = unsortedPayments.sort((a, b) => b.date.getTime() - a.date.getTime());
-
-        const paymentHistory: PaymentHistoryItem[] = sortedPayments.map(payment => {
-            const dateString = format(payment.date, 'dd/MM/yyyy');
-            return {
-                id: payment.id,
-                amount: payment.amount,
-                date: dateString,
-                notes: payment.notes || `Payment on ${dateString}`,
-                razorpay_payment_id: payment.razorpay_payment_id,
-            };
-        });
-
-        return { user, paymentHistory, pendingBills };
-
-    } catch (error) {
-        console.error("A critical error occurred while fetching user dashboard data for UID:", userId, error);
-        throw new Error("Could not fetch user data due to a server error.");
-    }
-}
-
-async function createRazorpayLink(options: any) {
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-        console.error('Razorpay API keys are not configured.');
-        return { success: false, message: 'Payment processing is currently unavailable. Check server configuration.' };
+export default async function DashboardPage() {
+    const user = await getCurrentUser();
+    
+    if (!user) {
+        redirect('/login');
     }
 
-    const instance = new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET,
-    });
-    
-    const paymentLink = await instance.paymentLink.create(options);
-    return { success: true, url: paymentLink.short_url };
-}
+    const dashboardData = await getUserDashboardData(user.uid);
 
-export async function createPaymentLink(userId: string) {
-    try {
-        const adminDb = getAdminDb();
-        const userDoc = await adminDb.collection('users').doc(userId).get();
-        if (!userDoc.exists) {
-             return { success: false, message: 'User not found.' };
-        }
-        
-        const userData = userDoc.data()!;
-        const pendingAmount = userData.pending || 0;
-        if (pendingAmount <= 0) return { success: false, message: 'You have no pending amount to pay.' };
-    
-        const amountInPaisa = Math.round(pendingAmount * 100);
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
-    
-        return createRazorpayLink({
-            amount: amountInPaisa,
-            currency: "INR",
-            accept_partial: false,
-            description: "UQBA COMMITTEE - Total Dues",
-            customer: { name: userData.name, email: userData.email, contact: userData.phone },
-            notify: { sms: true, email: true },
-            reminder_enable: true,
-            notes: { userId: userId, type: 'total_due' },
-            callback_url: `${appUrl}/dashboard`,
-            callback_method: "get"
-        });
-    } catch (error: any) {
-        console.error('Error creating total payment link:', error);
-        return { success: false, message: error.message || 'Could not initiate total payment.' };
-    }
-}
-
-export async function createPaymentLinkForBill(userId: string, billId: string) {
-    if (billId === 'outstanding-total') {
-        return createPaymentLink(userId);
+    if (!dashboardData) {
+        return (
+            <div className="container mx-auto p-6">
+                <div className="text-center">
+                    <h1 className="text-2xl font-bold text-red-600">Error Loading Dashboard</h1>
+                    <p className="mt-2 text-gray-600">Unable to load your dashboard data. Please try again later.</p>
+                </div>
+            </div>
+        );
     }
 
-    try {
-        const adminDb = getAdminDb();
-
-        const [userDoc, billDoc] = await Promise.all([
-            adminDb.collection('users').doc(userId).get(),
-            adminDb.collection('bills').doc(billId).get()
-        ]);
-    
-        if (!userDoc.exists || !billDoc.exists) {
-            return { success: false, message: 'User or bill not found.' };
-        }
-    
-        const userData = userDoc.data()!;
-        const billData = billDoc.data()!;
-        const billAmount = billData.amount || 0;
-    
-        if (billAmount <= 0) {
-            return { success: false, message: 'This bill has no amount due.' };
-        }
-    
-        const amountInPaisa = Math.round(billAmount * 100);
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
-    
-        return createRazorpayLink({
-            amount: amountInPaisa,
-            currency: "INR",
-            accept_partial: false,
-            description: billData.notes || `Payment for Bill`,
-            customer: { name: userData.name, email: userData.email, contact: userData.phone },
-            notify: { sms: true, email: true },
-            notes: { userId: userId, billId: billId, type: 'single_bill' },
-            callback_url: `${appUrl}/dashboard`,
-            callback_method: "get"
-        });
-    } catch (error: any) {
-        console.error('Error creating single bill payment link:', error);
-        return { success: false, message: error.message || 'Could not initiate payment for this bill.' };
-    }
+    return <DashboardClient dashboardData={dashboardData} userId={user.uid} />;
 }
