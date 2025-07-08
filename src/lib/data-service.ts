@@ -74,9 +74,9 @@ export async function getDashboardKpis() {
 export async function getPaymentOverview() {
     const adminDb = getAdminDb();
     const sixMonthsAgo = startOfMonth(subMonths(new Date(), 5));
+    // The orderBy clause is removed to prevent index-related errors.
     const paymentsSnapshot = await adminDb.collection('payments')
         .where('date', '>=', sixMonthsAgo)
-        .orderBy('date', 'asc')
         .get();
 
     // Initialize months
@@ -97,7 +97,6 @@ export async function getPaymentOverview() {
     });
 
     // For pending data, let's make a simple assumption for now
-    // A more complex system would track bills vs payments
     const usersSnapshot = await adminDb.collection('users').where('pending', '>', 0).get();
     const totalPending = usersSnapshot.docs.reduce((acc, doc) => {
         if(doc.data().email?.toLowerCase() !== ADMIN_EMAIL) {
@@ -179,7 +178,6 @@ export async function getAllExpenditures(): Promise<Expense[]> {
 
     return snapshot.docs.map(doc => {
         const data = doc.data();
-        // Firestore timestamps need to be converted to JS Date objects, then to ISO strings
         const expenseDate = data.date instanceof admin.firestore.Timestamp
             ? data.date.toDate().toISOString()
             : data.date;
@@ -201,14 +199,14 @@ export async function getPendingBillsForUser(userId: string): Promise<Bill[]> {
         const billsSnapshot = await adminDb.collection('bills')
             .where('userId', '==', userId)
             .where('status', '==', 'pending')
-            .orderBy('dueDate', 'asc')
+            // .orderBy('dueDate', 'asc') // This requires a composite index, removing it to prevent errors.
             .get();
 
         if (billsSnapshot.empty) {
             return [];
         }
 
-        return billsSnapshot.docs.map(doc => {
+        const bills = billsSnapshot.docs.map(doc => {
             const data = doc.data();
             const dueDate = data.dueDate instanceof admin.firestore.Timestamp
                 ? data.dueDate.toDate()
@@ -217,12 +215,22 @@ export async function getPendingBillsForUser(userId: string): Promise<Bill[]> {
             return {
                 id: doc.id,
                 amount: data.amount || 0,
-                date: format(dueDate, 'dd/MM/yyyy'),
+                date: dueDate, // Keep as Date object for sorting
                 notes: data.notes || `Bill for ${format(dueDate, 'MMMM yyyy')}`,
             };
         });
+        
+        // Sort the bills in memory instead of in the query
+        bills.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+        // Format the date to a string after sorting is complete
+        return bills.map(bill => ({
+            ...bill,
+            date: format(bill.date, 'dd/MM/yyyy'),
+        }));
+
     } catch (error) {
-        console.error("Error fetching pending bills for user:", userId, error);
+        console.error(`Error fetching pending bills for user ${userId}:`, error);
         return [];
     }
 }
