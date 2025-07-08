@@ -123,20 +123,25 @@ export async function recordBulkPaymentAction(userId: string, formData: FormData
         const startDate = startOfMonth(new Date(`${fromMonthStr}-01T12:00:00Z`));
         const endDate = lastDayOfMonth(new Date(`${toMonthStr}-01T12:00:00Z`));
 
-        const billsToPayQuery = adminDb.collection('bills')
+        // Fetch all pending bills for the user first
+        const allPendingBillsQuery = adminDb.collection('bills')
             .where('userId', '==', userId)
-            .where('status', '==', 'pending')
-            .where('dueDate', '>=', startDate)
-            .where('dueDate', '<=', endDate);
+            .where('status', '==', 'pending');
 
-        const billsToPaySnapshot = await billsToPayQuery.get();
+        const allPendingBillsSnapshot = await allPendingBillsQuery.get();
+        
+        // Filter the bills in code to avoid complex queries
+        const billsToPay = allPendingBillsSnapshot.docs.filter(doc => {
+            const dueDate = doc.data().dueDate.toDate();
+            return dueDate >= startDate && dueDate <= endDate;
+        });
 
-        if (billsToPaySnapshot.empty) {
+        if (billsToPay.length === 0) {
             return { success: false, message: 'No pending bills found in the selected date range.' };
         }
 
         let totalAmountPaid = 0;
-        billsToPaySnapshot.forEach(doc => {
+        billsToPay.forEach(doc => {
             totalAmountPaid += doc.data().amount || 0;
         });
 
@@ -154,7 +159,7 @@ export async function recordBulkPaymentAction(userId: string, formData: FormData
                 status: newPending <= 0 ? 'paid' : 'pending'
             });
 
-            billsToPaySnapshot.docs.forEach(doc => {
+            billsToPay.forEach(doc => {
                 transaction.update(doc.ref, { status: 'paid' });
             });
 
@@ -177,9 +182,6 @@ export async function recordBulkPaymentAction(userId: string, formData: FormData
 
     } catch (error: any) {
         console.error("Error in bulk record action:", error);
-        if (error.code === 'failed-precondition') {
-             return { success: false, message: `Database error: This query requires a custom index. Please create a composite index in your Firestore settings for the 'bills' collection on the fields: userId (asc), status (asc), dueDate (asc).` };
-        }
         return { success: false, message: error.message || 'An unexpected error occurred.' };
     }
 }
