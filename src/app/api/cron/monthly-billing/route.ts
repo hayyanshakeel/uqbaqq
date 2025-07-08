@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
-import { getBillingSettings } from '@/app/(admin)/admin/settings/actions'; // CORRECTED PATH
+import { getBillingSettings } from '@/app/(admin)/admin/settings/actions'; // Corrected Path
 import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 
 
@@ -17,9 +17,7 @@ export async function GET(request: NextRequest) {
 
     // 1. Handle Automatic Billing
     console.log("Cron Job: Starting monthly billing process...");
-    const settingsRef = adminDb.collection('app_settings').doc('billing');
-    const settingsDoc = await settingsRef.get();
-    const monthlyAmount = settingsDoc.data()?.monthlyAmount || 250;
+    const monthlyAmount = settings.monthlyAmount;
 
     const usersSnapshot = await adminDb.collection('users').where('status', '!=', 'deceased').get();
 
