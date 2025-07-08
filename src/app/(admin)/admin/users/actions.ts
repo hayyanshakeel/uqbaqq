@@ -514,8 +514,7 @@ export async function getPendingMonthsForUser(userId: string): Promise<string> {
         return 'Error fetching';
     }
 }
-
-// --- CORRECTED FUNCTION TO SPLIT A BILL ACROSS MONTHS ---
+// --- NEW FUNCTION TO SPLIT A BILL ACROSS MONTHS ---
 export async function splitMissedBillAction(formData: FormData) {
     const adminDb = getAdminDb();
     const userId = formData.get('userId') as string;
@@ -562,7 +561,7 @@ export async function splitMissedBillAction(formData: FormData) {
                 userId,
                 amount: currentMonthAmountInCents / 100, // Convert back to float for storage
                 dueDate: billingDate,
-                notes: `Bill for ${format(billingDate, 'MMMM yyyy')}`,
+                notes: `Bill for ${format(billingDate, 'MMMM<y_bin_46>')}`,
                 status: 'pending',
                 createdAt: new Date()
             });
