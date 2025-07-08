@@ -119,41 +119,52 @@ export async function recordBulkPaymentAction(userId: string, formData: FormData
     try {
         const adminDb = getAdminDb();
         const userRef = adminDb.collection('users').doc(userId);
-        const userDoc = await userRef.get();
+        const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending');
+        
+        const pendingBillsSnapshot = await pendingBillsQuery.get();
 
-        if (!userDoc.exists) {
-            throw new Error("User not found.");
-        }
-        const userData = userDoc.data()!;
-        const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
-        const todayStr = new Date().toISOString().split('T')[0];
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) {
+                throw new Error("User not found.");
+            }
+            const userData = userDoc.data()!;
+            const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
+            const todayStr = new Date().toISOString().split('T')[0];
+    
+            const fromDate = `${fromMonth}-01`;
+            const toDate = lastDayOfMonth(parse(toMonth, 'yyyy-MM', new Date())).toISOString().split('T')[0];
+    
+            const totalPaidForRange = calculateDuesForPeriod(fromDate, toDate);
+            const totalDuesToDate = calculateDuesForPeriod(joiningDate, todayStr);
+            const newPending = totalDuesToDate - totalPaidForRange;
+    
+            transaction.update(userRef, {
+                totalPaid: totalPaidForRange,
+                pending: newPending < 0 ? 0 : newPending,
+                status: newPending <= 0 ? 'paid' : 'pending',
+            });
+    
+            if (newPending <= 0) {
+                pendingBillsSnapshot.docs.forEach(doc => {
+                    transaction.update(doc.ref, { status: 'paid' });
+                });
+            }
 
-        const fromDate = `${fromMonth}-01`;
-        const toDate = lastDayOfMonth(parse(toMonth, 'yyyy-MM', new Date())).toISOString().split('T')[0];
-
-        const totalPaidForRange = calculateDuesForPeriod(fromDate, toDate);
-        const totalDuesToDate = calculateDuesForPeriod(joiningDate, todayStr);
-        const pending = totalDuesToDate - totalPaidForRange;
-
-        await userRef.update({
-            totalPaid: totalPaidForRange,
-            pending: pending < 0 ? 0 : pending,
-            status: pending <= 0 ? 'paid' : 'pending',
-        });
-
-        const paymentRef = adminDb.collection('payments').doc();
-        await paymentRef.set({
-            userId,
-            amount: totalPaidForRange,
-            date: new Date(),
-            notes: `Bulk payment recorded for period ${fromMonth} to ${toMonth}.`,
-            type: 'manual_bulk_record',
-            createdAt: new Date()
+            const paymentRef = adminDb.collection('payments').doc();
+            transaction.set(paymentRef, {
+                userId,
+                amount: totalPaidForRange,
+                date: new Date(),
+                notes: `Bulk payment recorded for period ${fromMonth} to ${toMonth}.`,
+                type: 'manual_bulk_record',
+                createdAt: new Date()
+            });
         });
 
         revalidatePath('/admin/users');
         revalidatePath('/admin/dashboard');
-        revalidatePath(`/dashboard?userId=${userId}`);
+        revalidatePath(`/dashboard`);
 
         return { success: true, message: `Successfully recorded payments from ${fromMonth} to ${toMonth}.` };
     } catch (error: any) {
@@ -295,7 +306,6 @@ export async function recordPaymentAction(formData: FormData) {
         const userRef = adminDb.collection('users').doc(userId);
         const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending');
         
-        // Fetch the bills that need to be updated *before* the transaction starts.
         const pendingBillsSnapshot = await pendingBillsQuery.get();
 
         await adminDb.runTransaction(async (transaction) => {
@@ -312,7 +322,6 @@ export async function recordPaymentAction(formData: FormData) {
                 status: newPending <= 0 ? 'paid' : 'pending'
             });
 
-            // If the payment clears the balance, mark all pending bills as paid
             if (newPending <= 0) {
                 pendingBillsSnapshot.docs.forEach(doc => {
                     transaction.update(doc.ref, { status: 'paid' });
@@ -555,7 +564,7 @@ export async function splitMissedBillAction(formData: FormData) {
                 userId,
                 amount: currentMonthAmountInCents / 100,
                 dueDate: billingDate,
-                notes: `Bill for ${format(billingDate, 'MMMM yyyy')}`,
+                notes: `Bill for ${format(billingDate, 'MMMM<y_bin_46>')}`,
                 status: 'pending',
                 createdAt: new Date()
             });
