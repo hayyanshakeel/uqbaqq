@@ -123,25 +123,22 @@ export async function recordBulkPaymentAction(userId: string, formData: FormData
         const startDate = startOfMonth(new Date(`${fromMonthStr}-01T12:00:00Z`));
         const endDate = lastDayOfMonth(new Date(`${toMonthStr}-01T12:00:00Z`));
 
-        // Fetch all pending bills for the user first
-        const allPendingBillsQuery = adminDb.collection('bills')
+        // This query is more efficient but requires a composite index.
+        // We will catch the specific error if the index is missing.
+        const billsToPayQuery = adminDb.collection('bills')
             .where('userId', '==', userId)
-            .where('status', '==', 'pending');
+            .where('status', '==', 'pending')
+            .where('dueDate', '>=', startDate)
+            .where('dueDate', '<=', endDate);
 
-        const allPendingBillsSnapshot = await allPendingBillsQuery.get();
-        
-        // Filter the bills in code to avoid complex queries
-        const billsToPay = allPendingBillsSnapshot.docs.filter(doc => {
-            const dueDate = doc.data().dueDate.toDate();
-            return dueDate >= startDate && dueDate <= endDate;
-        });
+        const billsToPaySnapshot = await billsToPayQuery.get();
 
-        if (billsToPay.length === 0) {
+        if (billsToPaySnapshot.empty) {
             return { success: false, message: 'No pending bills found in the selected date range.' };
         }
 
         let totalAmountPaid = 0;
-        billsToPay.forEach(doc => {
+        billsToPaySnapshot.forEach(doc => {
             totalAmountPaid += doc.data().amount || 0;
         });
 
@@ -159,7 +156,7 @@ export async function recordBulkPaymentAction(userId: string, formData: FormData
                 status: newPending <= 0 ? 'paid' : 'pending'
             });
 
-            billsToPay.forEach(doc => {
+            billsToPaySnapshot.docs.forEach(doc => {
                 transaction.update(doc.ref, { status: 'paid' });
             });
 
@@ -182,6 +179,13 @@ export async function recordBulkPaymentAction(userId: string, formData: FormData
 
     } catch (error: any) {
         console.error("Error in bulk record action:", error);
+        // This is the crucial part. We catch the specific Firestore error for a missing index.
+        if (error.code === 'failed-precondition' || error.message.includes('index')) {
+             return { 
+                 success: false, 
+                 message: `Database Error: This feature requires a composite index. Please go to your Firebase console, navigate to Firestore Database -> Indexes, and create a new index for the 'bills' collection with the following fields: 1. userId (Ascending), 2. status (Ascending), 3. dueDate (Ascending).` 
+             };
+        }
         return { success: false, message: error.message || 'An unexpected error occurred.' };
     }
 }
