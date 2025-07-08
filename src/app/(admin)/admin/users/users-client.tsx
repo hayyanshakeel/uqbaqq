@@ -7,12 +7,25 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, HeartCrack, Send } from "lucide-react";
+import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, HeartCrack, Send, SplitSquareHorizontal } from "lucide-react";
 import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import type { User } from '@/lib/data-service';
-import { addUserAction, deleteUserAction, recordPaymentAction, addMissedBillAction, reverseLastPaymentAction, reverseLastBillAction, updateUserAction, recordBulkPaymentAction, markAsDeceasedAction, sendPaymentLinkAction } from './actions';
+import { 
+    addUserAction, 
+    deleteUserAction, 
+    recordPaymentAction, 
+    addMissedBillAction, 
+    reverseLastPaymentAction, 
+    reverseLastBillAction, 
+    updateUserAction, 
+    recordBulkPaymentAction, 
+    markAsDeceasedAction, 
+    sendPaymentLinkAction,
+    getPendingMonthsForUser,
+    splitMissedBillAction // Import the new action
+} from './actions';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
@@ -28,9 +41,11 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
     const [isBulkRecordOpen, setIsBulkRecordOpen] = useState(false);
     const [isAddMissedBillOpen, setIsAddMissedBillOpen] = useState(false);
+    const [isSplitBillOpen, setIsSplitBillOpen] = useState(false); // New state for the split bill dialog
     const [isMarkAsDeceasedOpen, setIsMarkAsDeceasedOpen] = useState(false);
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{ action: () => void, title: string, description: string } | null>(null);
+    const [isExporting, setIsExporting] = useState(false);
 
     const { toast } = useToast();
     const [isPending, startTransition] = useTransition();
@@ -40,7 +55,22 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const recordPaymentFormRef = useRef<HTMLFormElement>(null);
     const bulkRecordFormRef = useRef<HTMLFormElement>(null);
     const addMissedBillFormRef = useRef<HTMLFormElement>(null);
+    const splitBillFormRef = useRef<HTMLFormElement>(null); // New ref for the split bill form
     const deceasedFormRef = useRef<HTMLFormElement>(null);
+
+    // New handler for the split bill form
+    const handleSplitBill = async (formData: FormData) => {
+        startTransition(async () => {
+            const result = await splitMissedBillAction(formData);
+            if (result.success) {
+                toast({ title: "Success", description: result.message });
+                setIsSplitBillOpen(false);
+                splitBillFormRef.current?.reset();
+            } else {
+                toast({ variant: "destructive", title: "Error", description: result.message });
+            }
+        });
+    };
 
     const handleAddUser = async (formData: FormData) => {
         startTransition(async () => {
@@ -135,7 +165,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
             }
         });
     };
-
+    
     const handleReversePayment = (userId: string) => {
         setConfirmAction({
             title: 'Reverse Last Payment?',
@@ -189,11 +219,13 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setFilteredUsers(newFilteredUsers);
     };
 
-    const handleExportData = () => {
-        const headers = ['name', 'email', 'phone', 'status', 'joined', 'totalPaid', 'pending'];
+    const handleExportData = async () => {
+        setIsExporting(true);
+        const headers = ['name', 'email', 'phone', 'status', 'joined', 'totalPaid', 'pending', 'pendingMonths'];
         const csvRows = [headers.join(",")];
         
-        filteredUsers.forEach(user => {
+        for (const user of filteredUsers) {
+            const pendingMonths = await getPendingMonthsForUser(user.id);
             const row = [
                 `"${user.name.replace(/"/g, '""')}"`,
                 user.email || '',
@@ -201,10 +233,11 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 user.status,
                 user.joined,
                 user.totalPaid.toFixed(2),
-                user.pending.toFixed(2)
+                user.pending.toFixed(2),
+                `"${pendingMonths}"`
             ].join(",");
             csvRows.push(row);
-        });
+        }
 
         const csvContent = "data:text/csv;charset=utf-8," + encodeURIComponent(csvRows.join("\n"));
         const link = document.createElement("a");
@@ -213,6 +246,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        setIsExporting(false);
     };
 
 
@@ -238,6 +272,12 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const openAddMissedBillDialog = (user: User) => {
         setSelectedUser(user);
         setIsAddMissedBillOpen(true);
+    };
+    
+    // New function to open the split bill dialog
+    const openSplitBillDialog = (user: User) => {
+        setSelectedUser(user);
+        setIsSplitBillOpen(true);
     };
 
     const openMarkAsDeceasedDialog = (user: User) => {
@@ -272,7 +312,12 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openAddMissedBillDialog(user)}>
                     <CalendarPlus className="mr-2 h-4 w-4" />
-                    <span>Add Missed Bill</span>
+                    <span>Add Single Missed Bill</span>
+                </DropdownMenuItem>
+                {/* New dropdown item for splitting bills */}
+                <DropdownMenuItem onSelect={() => openSplitBillDialog(user)}>
+                    <SplitSquareHorizontal className="mr-2 h-4 w-4" />
+                    <span>Add & Split Bill</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => handleReversePayment(user.id)} className="text-destructive focus:text-destructive">
@@ -304,7 +349,10 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                         <p className="text-muted-foreground">Manage all committee members and their payment records.</p>
                     </div>
                     <div className="flex items-center space-x-2 flex-wrap gap-2">
-                        <Button variant="outline" onClick={handleExportData}><Download className="mr-2 h-4 w-4" /> Export Data</Button>
+                        <Button variant="outline" onClick={handleExportData} disabled={isExporting}>
+                            {isExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                             Export Data
+                        </Button>
                         <Dialog open={isAddUserOpen} onOpenChange={setIsAddUserOpen}>
                             <DialogTrigger asChild>
                                 <Button><PlusCircle className="mr-2 h-4 w-4" /> Add User</Button>
@@ -449,6 +497,8 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     </CardContent>
                 </Card>
             </main>
+            
+            {/* ... Other Dialogs (Edit, Record Payment, etc.) remain unchanged ... */}
 
             <Dialog open={isEditUserOpen} onOpenChange={setIsEditUserOpen}>
                 <DialogContent>
@@ -574,11 +624,46 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     </form>
                 </DialogContent>
             </Dialog>
+            
+            {/* --- NEW DIALOG FOR SPLITTING BILLS --- */}
+            <Dialog open={isSplitBillOpen} onOpenChange={setIsSplitBillOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Add & Split Bill for {selectedUser?.name}</DialogTitle>
+                        <DialogDescription>
+                            Enter a total amount and a date range. The system will split the amount evenly across those months.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form ref={splitBillFormRef} action={handleSplitBill}>
+                        <Input type="hidden" name="userId" value={selectedUser?.id || ''} />
+                        <div className="grid gap-4 py-4">
+                            <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="startMonth" className="text-right">Start Month</Label>
+                                <Input id="startMonth" name="startMonth" type="month" className="col-span-3" required />
+                            </div>
+                             <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="endMonth" className="text-right">End Month</Label>
+                                <Input id="endMonth" name="endMonth" type="month" className="col-span-3" required />
+                            </div>
+                            <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="totalAmount" className="text-right">Total Amount (₹)</Label>
+                                <Input id="totalAmount" name="totalAmount" type="number" step="0.01" placeholder="e.g., 1000" className="col-span-3" required />
+                            </div>
+                        </div>
+                        <DialogFooter>
+                            <Button type="submit" disabled={isPending}>
+                                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                Split & Save
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
 
             <Dialog open={isAddMissedBillOpen} onOpenChange={setIsAddMissedBillOpen}>
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>Add Missed Bill for {selectedUser?.name}</DialogTitle>
+                        <DialogTitle>Add Single Missed Bill for {selectedUser?.name}</DialogTitle>
                         <DialogDescription>
                             Add a charge for a missed payment from a previous month. This will increase their pending balance.
                         </DialogDescription>
