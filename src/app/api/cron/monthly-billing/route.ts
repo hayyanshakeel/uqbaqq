@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
-import { getBillingSettings } from '@/app/(admin)/admin/settings/actions'; // CORRECTED PATH
+import { getBillingSettings } from '@/app/(admin)/admin/settings/actions.ts'; // CORRECTED PATH
 import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 
 
