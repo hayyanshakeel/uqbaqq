@@ -578,7 +578,7 @@ export async function splitMissedBillAction(formData: FormData) {
                 userId,
                 amount: currentMonthAmountInCents / 100,
                 dueDate: billingDate,
-                notes: `Bill for ${format(billingDate, 'MMMM<y_bin_46>')}`,
+                notes: `Bill for ${format(billingDate, 'MMMM yyyy')}`, // Corrected format string
                 status: 'pending',
                 createdAt: new Date()
             });
