@@ -42,6 +42,7 @@ export async function POST(req: NextRequest) {
             const paymentLinkEntity = payload.payload.payment_link.entity;
             
             const userId = paymentLinkEntity.notes?.userId;
+            const billId = paymentLinkEntity.notes?.billId;
             const amountPaid = paymentEntity.amount / 100;
             const paymentId = paymentEntity.id;
 
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest) {
                 return NextResponse.json({ error: 'User ID missing' }, { status: 400 });
             }
 
-            console.log(`Processing payment for user: ${userId}, amount: ${amountPaid}`);
+            console.log(`Processing payment for user: ${userId}, amount: ${amountPaid}, billId: ${billId || 'N/A'}`);
 
             const userRef = adminDb.collection('users').doc(userId);
             
@@ -69,19 +70,22 @@ export async function POST(req: NextRequest) {
                     pending: newPending < 0 ? 0 : newPending,
                     status: newPending <= 0 ? 'paid' : 'pending'
                 });
+                
+                if (billId) {
+                    const billRef = adminDb.collection('bills').doc(billId);
+                    transaction.update(billRef, { status: 'paid' });
+                }
 
                 const paymentRef = adminDb.collection('payments').doc(paymentId);
                 transaction.set(paymentRef, {
                     userId,
                     amount: amountPaid,
                     date: new Date(paymentEntity.created_at * 1000),
-                    notes: `Paid via Razorpay. Payment ID: ${paymentId}`,
+                    notes: `Paid via Razorpay. Ref: ${paymentLinkEntity.notes?.type || 'payment'}.`,
                     type: 'razorpay',
                     createdAt: new Date(),
                     razorpay_payment_id: paymentId,
                     razorpay_order_id: paymentEntity.order_id,
-                    // *** THIS IS THE FIX ***
-                    // Use null as a fallback if the signature is undefined.
                     razorpay_signature: paymentEntity.signature || null,
                 });
             });
