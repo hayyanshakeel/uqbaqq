@@ -67,7 +67,6 @@ export async function sendPaymentLinkAction(userId: string) {
         return { success: false, message: error.message };
     }
 }
-// --- *** NEW: Server Action to Mark a User as Deceased *** ---
 export async function markAsDeceasedAction(userId: string, formData: FormData) {
     const dateOfDeathStr = formData.get('dateOfDeath') as string;
 
@@ -88,18 +87,15 @@ export async function markAsDeceasedAction(userId: string, formData: FormData) {
         const userData = userDoc.data()!;
         const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
         
-        // Calculate the final dues only up to the date of death
         const finalDues = calculateDuesForPeriod(joiningDate, dateOfDeathStr);
         const finalPending = finalDues - (userData.totalPaid || 0);
 
-        // Update the user's document in Firestore
         await userRef.update({
             status: 'deceased',
-            pending: finalPending < 0 ? 0 : finalPending, // Set final pending amount
+            pending: finalPending < 0 ? 0 : finalPending, 
             dateOfDeath: new Date(dateOfDeathStr)
         });
 
-        // Disable the user's account in Firebase Auth to prevent logins
         await adminAuth.updateUser(userId, { disabled: true });
 
         revalidatePath('/admin/users');
@@ -112,8 +108,6 @@ export async function markAsDeceasedAction(userId: string, formData: FormData) {
     }
 }
 
-
-// --- Server Action to Bulk Record Past Payments ---
 export async function recordBulkPaymentAction(userId: string, formData: FormData) {
     const fromMonth = formData.get('fromMonth') as string;
     const toMonth = formData.get('toMonth') as string;
@@ -168,8 +162,6 @@ export async function recordBulkPaymentAction(userId: string, formData: FormData
     }
 }
 
-
-// --- Server Action to Update User Details and Password (CORRECTED) ---
 export async function updateUserAction(userId: string, formData: FormData) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
@@ -186,7 +178,6 @@ export async function updateUserAction(userId: string, formData: FormData) {
     try {
         const firestoreUpdatePayload = { name, email, phone };
         
-        // **FIX 1: Format the phone number to E.164 standard**
         const formattedPhone = phone.startsWith('+') ? phone : `+91${phone}`;
 
         const authUpdatePayload: { displayName: string; email: string; phoneNumber: string; password?: string } = { 
@@ -209,13 +200,10 @@ export async function updateUserAction(userId: string, formData: FormData) {
         return { success: true, message: 'User details updated successfully.' };
     } catch (error: any) {
         console.error("Error updating user:", error);
-        // **FIX 2: Provide a more detailed error message**
         return { success: false, message: error.message || 'Failed to update user details.' };
     }
 }
 
-
-// --- Existing User Actions (Unchanged) ---
 export async function addUserAction(formData: FormData) {
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
@@ -305,7 +293,11 @@ export async function recordPaymentAction(formData: FormData) {
 
     try {
         const userRef = adminDb.collection('users').doc(userId);
+        const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending');
         
+        // Fetch the bills that need to be updated *before* the transaction starts.
+        const pendingBillsSnapshot = await pendingBillsQuery.get();
+
         await adminDb.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
             if (!userDoc.exists) throw new Error('User not found!');
@@ -319,6 +311,13 @@ export async function recordPaymentAction(formData: FormData) {
                 pending: newPending < 0 ? 0 : newPending,
                 status: newPending <= 0 ? 'paid' : 'pending'
             });
+
+            // If the payment clears the balance, mark all pending bills as paid
+            if (newPending <= 0) {
+                pendingBillsSnapshot.docs.forEach(doc => {
+                    transaction.update(doc.ref, { status: 'paid' });
+                });
+            }
 
             const paymentRef = adminDb.collection('payments').doc();
             transaction.set(paymentRef, {
@@ -341,7 +340,6 @@ export async function recordPaymentAction(formData: FormData) {
         return { success: false, message };
     }
 }
-
 
 export async function addMissedBillAction(formData: FormData) {
     const adminDb = getAdminDb();
@@ -486,7 +484,6 @@ export async function reverseLastBillAction(userId: string) {
     }
 }
 
-// --- NEW FUNCTION for CSV Export ---
 export async function getPendingMonthsForUser(userId: string): Promise<string> {
     if (!userId) return 'N/A';
     const adminDb = getAdminDb();
@@ -503,24 +500,23 @@ export async function getPendingMonthsForUser(userId: string): Promise<string> {
 
         const months = billsSnapshot.docs.map(doc => {
             const data = doc.data();
-            const dueDate = data.dueDate.toDate(); // Convert Firestore Timestamp
-            return format(dueDate, 'MMM-yy'); // e.g., "Jul-25"
+            const dueDate = data.dueDate.toDate(); 
+            return format(dueDate, 'MMM-yy'); 
         });
 
-        return months.join(', '); // e.g., "May-25, Jun-25, Jul-25"
+        return months.join(', ');
 
     } catch (error) {
         console.error(`Error fetching pending months for user ${userId}:`, error);
         return 'Error fetching';
     }
 }
-// --- NEW FUNCTION TO SPLIT A BILL ACROSS MONTHS ---
 export async function splitMissedBillAction(formData: FormData) {
     const adminDb = getAdminDb();
     const userId = formData.get('userId') as string;
     const totalAmount = parseFloat(formData.get('totalAmount') as string);
-    const startMonthStr = formData.get('startMonth') as string; // "2025-01"
-    const endMonthStr = formData.get('endMonth') as string; // "2025-04"
+    const startMonthStr = formData.get('startMonth') as string; 
+    const endMonthStr = formData.get('endMonth') as string; 
 
     if (!userId || isNaN(totalAmount) || totalAmount <= 0 || !startMonthStr || !endMonthStr) {
         return { success: false, message: 'Invalid data provided. Please fill all fields correctly.' };
@@ -539,7 +535,6 @@ export async function splitMissedBillAction(formData: FormData) {
             return { success: false, message: 'Invalid month range.' };
         }
 
-        // Use integer math for cents to avoid floating point issues
         const totalAmountInCents = Math.round(totalAmount * 100);
         const amountPerMonthInCents = Math.floor(totalAmountInCents / numberOfMonths);
         let remainderInCents = totalAmountInCents % numberOfMonths;
@@ -550,7 +545,6 @@ export async function splitMissedBillAction(formData: FormData) {
             const billingDate = addMonths(startDate, i);
             const billRef = adminDb.collection('bills').doc();
 
-            // Distribute the remainder cents across the first few months
             let currentMonthAmountInCents = amountPerMonthInCents;
             if (remainderInCents > 0) {
                 currentMonthAmountInCents++;
@@ -559,9 +553,8 @@ export async function splitMissedBillAction(formData: FormData) {
             
             batch.set(billRef, {
                 userId,
-                amount: currentMonthAmountInCents / 100, // Convert back to float for storage
+                amount: currentMonthAmountInCents / 100,
                 dueDate: billingDate,
-                // **THE FIX IS HERE:** Corrected the format string
                 notes: `Bill for ${format(billingDate, 'MMMM yyyy')}`,
                 status: 'pending',
                 createdAt: new Date()
