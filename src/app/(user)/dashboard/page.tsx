@@ -6,9 +6,9 @@ import { auth, firebaseError } from '@/lib/firebase';
 import { getUserDashboardData, UserDashboardData, PaymentHistoryItem, createPaymentLink, createPaymentLinkForBill, Bill } from './actions';
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ArrowRight, CheckCircle, Clock, Loader2, Download, FileText } from "lucide-react";
+import { ArrowRight, CheckCircle, Clock, Loader2, Download, CreditCard } from "lucide-react";
 import { Skeleton } from '@/components/ui/skeleton';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
@@ -20,7 +20,7 @@ function Dashboard() {
 
   const [dashboardData, setDashboardData] = useState<{user: UserDashboardData, paymentHistory: PaymentHistoryItem[], pendingBills: Bill[]} | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isPaying, setIsPaying] = useState<string | boolean>(false); // Can be true, false, or a billId
+  const [isPaying, setIsPaying] = useState<string | boolean>(false); // Can be true (for total), false, or a billId
   const [isVerifying, setIsVerifying] = useState(false);
 
   const refreshDashboardData = async (userId: string) => {
@@ -126,7 +126,7 @@ function Dashboard() {
     receiptWindow?.document.close();
     receiptWindow?.focus();
   };
-
+  
   const handlePay = async (billId: string | null = null) => {
     if (!auth || !auth.currentUser) return;
     setIsPaying(billId || true);
@@ -199,24 +199,28 @@ function Dashboard() {
           <CardContent><div className={`text-3xl font-bold ${hasPendingPayment ? 'text-destructive' : ''}`}>₹{userData.pending.toFixed(2)}</div><p className="text-xs text-muted-foreground">{hasPendingPayment ? "Please clear your dues." : "All dues are clear."}</p></CardContent>
         </Card>
       </div>
+
       {hasPendingPayment && (
           <Card className='mb-8'>
-            <CardHeader><CardTitle>Pending Bills</CardTitle><p className="text-sm text-muted-foreground">You can pay for individual bills below.</p></CardHeader>
+            <CardHeader>
+                <CardTitle>Pending Bills</CardTitle>
+                <CardDescription>You can pay for individual bills below or pay the total amount.</CardDescription>
+            </CardHeader>
             <CardContent>
                 <Table>
                     <TableHeader>
                         <TableRow>
-                            <TableHead>Date</TableHead>
-                            <TableHead>Description</TableHead>
+                            <TableHead>Bill For</TableHead>
+                            <TableHead>Due Date</TableHead>
                             <TableHead className="text-right">Amount</TableHead>
                             <TableHead className="text-right">Action</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {pendingBills.map(bill => (
+                        {pendingBills.length > 0 ? pendingBills.map(bill => (
                             <TableRow key={bill.id}>
-                                <TableCell>{bill.date}</TableCell>
                                 <TableCell className="font-medium">{bill.notes}</TableCell>
+                                <TableCell>{bill.date}</TableCell>
                                 <TableCell className="text-right font-semibold">₹{bill.amount.toFixed(2)}</TableCell>
                                 <TableCell className="text-right">
                                     <Button onClick={() => handlePay(bill.id)} disabled={!!isPaying} size="sm">
@@ -225,16 +229,32 @@ function Dashboard() {
                                     </Button>
                                 </TableCell>
                             </TableRow>
-                        ))}
+                        )) : (
+                            <TableRow>
+                                <TableCell colSpan={4} className="h-24 text-center">No individual bills found. You can pay the total pending amount.</TableCell>
+                            </TableRow>
+                        )}
                     </TableBody>
                 </Table>
             </CardContent>
-             <CardFooter className="border-t px-6 py-4 bg-muted/20"><div className="flex justify-between items-center w-full"><p className="text-muted-foreground font-medium">Or pay the total outstanding amount.</p><Button onClick={() => handlePay(null)} disabled={!!isPaying}>{isPaying === true && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Pay Total<ArrowRight className="ml-2 h-4 w-4" /></Button></div></CardFooter>
+             <CardFooter className="border-t px-6 py-4 bg-muted/20">
+                <div className="flex justify-between items-center w-full">
+                    <p className="text-muted-foreground font-medium">Pay the total outstanding amount.</p>
+                    <Button onClick={() => handlePay(null)} disabled={!!isPaying}>
+                        {isPaying === true && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Pay Total (₹{userData.pending.toFixed(2)})
+                        <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                </div>
+            </CardFooter>
           </Card>
       )}
 
       <Card>
-        <CardHeader><CardTitle>Payment History</CardTitle><p className="text-sm text-muted-foreground">A record of your past payments.</p></CardHeader>
+        <CardHeader>
+            <CardTitle>Payment History</CardTitle>
+            <CardDescription>A record of your successfully completed payments.</CardDescription>
+        </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
@@ -247,15 +267,22 @@ function Dashboard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {paymentHistory.map((payment) => (<TableRow key={payment.id}><TableCell>{payment.date}</TableCell><TableCell className="font-medium">{payment.notes}</TableCell><TableCell><Badge variant='default' className='bg-green-600'>Paid</Badge></TableCell><TableCell className="text-right">₹{payment.amount.toFixed(2)}</TableCell>
+              {paymentHistory.length > 0 ? paymentHistory.map((payment) => (
+              <TableRow key={payment.id}>
+                <TableCell>{payment.date}</TableCell>
+                <TableCell className="font-medium">{payment.notes}</TableCell>
+                <TableCell><Badge variant='default' className='bg-green-600 hover:bg-green-700'>Paid</Badge></TableCell>
+                <TableCell className="text-right">₹{payment.amount.toFixed(2)}</TableCell>
                 <TableCell className="text-right">
                     <Button variant="outline" size="icon" onClick={() => handleDownloadReceipt(payment, userData.name)}>
                         <Download className="h-4 w-4" />
                         <span className="sr-only">Download Receipt</span>
                     </Button>
                 </TableCell>
-              </TableRow>))}
-              {paymentHistory.length === 0 && (<TableRow><TableCell colSpan={5} className="text-center h-24">No payment history found.</TableCell></TableRow>)}
+              </TableRow>
+              )) : (
+                <TableRow><TableCell colSpan={5} className="text-center h-24">No payment history found.</TableCell></TableRow>
+              )}
             </TableBody>
           </Table>
         </CardContent>
