@@ -24,7 +24,7 @@ import {
     markAsDeceasedAction, 
     sendPaymentLinkAction,
     getPendingMonthsForUser,
-    splitMissedBillAction // Import the new action
+    splitMissedBillAction
 } from './actions';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
@@ -41,7 +41,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
     const [isBulkRecordOpen, setIsBulkRecordOpen] = useState(false);
     const [isAddMissedBillOpen, setIsAddMissedBillOpen] = useState(false);
-    const [isSplitBillOpen, setIsSplitBillOpen] = useState(false); // New state for the split bill dialog
+    const [isSplitBillOpen, setIsSplitBillOpen] = useState(false);
     const [isMarkAsDeceasedOpen, setIsMarkAsDeceasedOpen] = useState(false);
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{ action: () => void, title: string, description: string } | null>(null);
@@ -55,10 +55,9 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const recordPaymentFormRef = useRef<HTMLFormElement>(null);
     const bulkRecordFormRef = useRef<HTMLFormElement>(null);
     const addMissedBillFormRef = useRef<HTMLFormElement>(null);
-    const splitBillFormRef = useRef<HTMLFormElement>(null); // New ref for the split bill form
+    const splitBillFormRef = useRef<HTMLFormElement>(null);
     const deceasedFormRef = useRef<HTMLFormElement>(null);
 
-    // New handler for the split bill form
     const handleSplitBill = async (formData: FormData) => {
         startTransition(async () => {
             const result = await splitMissedBillAction(formData);
@@ -274,7 +273,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setIsAddMissedBillOpen(true);
     };
     
-    // New function to open the split bill dialog
     const openSplitBillDialog = (user: User) => {
         setSelectedUser(user);
         setIsSplitBillOpen(true);
@@ -314,7 +312,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     <CalendarPlus className="mr-2 h-4 w-4" />
                     <span>Add Single Missed Bill</span>
                 </DropdownMenuItem>
-                {/* New dropdown item for splitting bills */}
                 <DropdownMenuItem onSelect={() => openSplitBillDialog(user)}>
                     <SplitSquareHorizontal className="mr-2 h-4 w-4" />
                     <span>Add & Split Bill</span>
@@ -498,8 +495,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 </Card>
             </main>
             
-            {/* ... Other Dialogs (Edit, Record Payment, etc.) remain unchanged ... */}
-
             <Dialog open={isEditUserOpen} onOpenChange={setIsEditUserOpen}>
                 <DialogContent>
                     <DialogHeader>
@@ -625,7 +620,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 </DialogContent>
             </Dialog>
             
-            {/* --- NEW DIALOG FOR SPLITTING BILLS --- */}
             <Dialog open={isSplitBillOpen} onOpenChange={setIsSplitBillOpen}>
                 <DialogContent>
                     <DialogHeader>
