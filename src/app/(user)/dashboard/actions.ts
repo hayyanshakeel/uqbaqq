@@ -112,7 +112,10 @@ export async function createPaymentLink(userId: string) {
     try {
         const adminDb = getAdminDb();
         const userDoc = await adminDb.collection('users').doc(userId).get();
-        if (!userDoc.exists) return { success: false, message: 'User not found.' };
+        // ** THE FIX IS HERE: from userDoc.exists() to userDoc.exists **
+        if (!userDoc.exists) {
+             return { success: false, message: 'User not found.' };
+        }
         
         const userData = userDoc.data()!;
         const pendingAmount = userData.pending || 0;
@@ -148,7 +151,8 @@ export async function createPaymentLinkForBill(userId: string, billId: string) {
             adminDb.collection('bills').doc(billId).get()
         ]);
     
-        if (!userDoc.exists() || !billDoc.exists()) {
+        // ** THE FIX IS HERE: from .exists() to .exists **
+        if (!userDoc.exists || !billDoc.exists) {
             return { success: false, message: 'User or bill not found.' };
         }
     
