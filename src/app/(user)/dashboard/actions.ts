@@ -3,7 +3,7 @@
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
 import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid, format } from 'date-fns';
-import { getBillingSettings } from '../settings/actions';
+import { getBillingSettings } from '@/app/(admin)/admin/settings/actions';
 import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 import * as admin from 'firebase-admin';
 
