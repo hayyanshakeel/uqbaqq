@@ -4,8 +4,8 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { CreditCard, History, Receipt, AlertCircle } from 'lucide-react';
-import { createPaymentLink, createPaymentLinkForBill } from './actions';
+import { CreditCard, History, Receipt, AlertCircle, Loader2 } from 'lucide-react';
+import { createPaymentLink, createPaymentLinkForBill, getReceiptUrl } from './actions';
 import { UserDashboardData, PaymentHistoryItem } from './actions';
 import { Bill } from '@/lib/data-service';
 
@@ -21,13 +21,14 @@ interface DashboardClientProps {
 export default function DashboardClient({ dashboardData, userId }: DashboardClientProps) {
     const [isLoading, setIsLoading] = useState(false);
     const [loadingBillId, setLoadingBillId] = useState<string | null>(null);
+    const [loadingReceiptId, setLoadingReceiptId] = useState<string | null>(null);
     const { user, paymentHistory, pendingBills } = dashboardData;
 
     const handlePayment = async () => {
         setIsLoading(true);
         try {
             const result = await createPaymentLink(userId);
-            if (result.success) {
+            if (result.success && result.url) {
                 window.open(result.url, '_blank');
             } else {
                 alert(result.message || 'Failed to create payment link');
@@ -44,7 +45,7 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
         setLoadingBillId(billId);
         try {
             const result = await createPaymentLinkForBill(userId, billId);
-            if (result.success) {
+            if (result.success && result.url) {
                 window.open(result.url, '_blank');
             } else {
                 alert(result.message || 'Failed to create payment link');
@@ -54,6 +55,23 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
             alert('An error occurred while processing payment');
         } finally {
             setLoadingBillId(null);
+        }
+    };
+    
+    const handleViewReceipt = async (paymentId: string) => {
+        setLoadingReceiptId(paymentId);
+        try {
+            const result = await getReceiptUrl(paymentId);
+            if (result.success && result.url) {
+                window.open(result.url, '_blank');
+            } else {
+                alert(result.message || 'Could not retrieve receipt.');
+            }
+        } catch (error) {
+            console.error('Receipt error:', error);
+            alert('An error occurred while fetching the receipt.');
+        } finally {
+            setLoadingReceiptId(null);
         }
     };
 
@@ -173,9 +191,26 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
                                             )}
                                         </div>
                                     </div>
-                                    <Badge variant="secondary">
-                                        ₹{payment.amount.toLocaleString()}
-                                    </Badge>
+                                    <div className="flex items-center gap-2">
+                                        <Badge variant="secondary">
+                                            ₹{payment.amount.toLocaleString()}
+                                        </Badge>
+                                        {payment.razorpay_payment_id && (
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => handleViewReceipt(payment.razorpay_payment_id!)}
+                                                disabled={loadingReceiptId === payment.razorpay_payment_id}
+                                            >
+                                                {loadingReceiptId === payment.razorpay_payment_id ? (
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                ) : (
+                                                    <Receipt className="h-4 w-4" />
+                                                )}
+                                                <span className="ml-2 hidden sm:inline">Receipt</span>
+                                            </Button>
+                                        )}
+                                    </div>
                                 </div>
                             ))}
                         </div>
