@@ -155,7 +155,7 @@ export async function recalculateBalanceUntilDateAction(userId: string, formData
 
             // 3. Calculate new pending balance and generate new pending bills
             let newPending = 0;
-            const pendingPeriodStart = addMonths(untilDate, 1);
+            const pendingPeriodStart = startOfMonth(addMonths(untilDate, 1));
 
             if (isAfter(today, pendingPeriodStart)) {
                 const { totalDues: pendingAmount, monthlyBreakdown: pendingBills } = calculateDuesForPeriod(
