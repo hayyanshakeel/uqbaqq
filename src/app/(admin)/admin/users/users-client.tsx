@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { PlusCircle, MoreHorizontal, Trash2, CreditCard, Loader2, Undo2, Edit, HeartCrack, Send, RefreshCw, FilePlus, FileMinus } from "lucide-react";
+import { PlusCircle, MoreHorizontal, Trash2, CreditCard, Loader2, Undo2, Edit, HeartCrack, Send, RefreshCw, FileMinus } from "lucide-react";
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import type { User, Bill } from '@/lib/data-service';
@@ -25,7 +25,6 @@ type UserActions = {
     sendPaymentLinkAction: (userId: string) => Promise<{ success: boolean; message: string; }>;
     reverseLastPaymentAction: (userId: string) => Promise<{ success: boolean; message: string; }>;
     recalculateBalanceUntilDateAction: (userId: string, formData: FormData) => Promise<{ success: boolean; message: string; }>;
-    addSinglePaymentAction: (userId: string, formData: FormData) => Promise<{ success: boolean; message: string; }>;
     addMissedBillAction: (userId: string, formData: FormData) => Promise<{ success: boolean; message: string; }>;
     getPendingBillsForUserAction: (userId: string) => Promise<Bill[]>;
     markBillAsPaidAction: (userId: string, billId: string, billAmount: number) => Promise<{ success: boolean; message: string; }>;
@@ -39,7 +38,8 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
     const [filteredUsers, setFilteredUsers] = useState(initialUsers);
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [pendingBills, setPendingBills] = useState<Bill[]>([]);
-    const [dialogs, setDialogs] = useState({ add: false, edit: false, recalculate: false, deceased: false, payBills: false, addPayment: false, addMissedBill: false });
+    // FIX: Removed 'addPayment' from the dialog state
+    const [dialogs, setDialogs] = useState({ add: false, edit: false, recalculate: false, deceased: false, payBills: false, addMissedBill: false });
     const [isLoading, setIsLoading] = useState(false);
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{ action: () => void, title: string, description: string } | null>(null);
@@ -78,7 +78,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
     };
 
     const closeAllDialogs = () => {
-        setDialogs({ add: false, edit: false, recalculate: false, deceased: false, payBills: false, addPayment: false, addMissedBill: false });
+        setDialogs({ add: false, edit: false, recalculate: false, deceased: false, payBills: false, addMissedBill: false });
     };
 
     const openPayBillsDialog = async (user: User) => {
@@ -119,7 +119,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal /></Button></DropdownMenuTrigger>
                                                 <DropdownMenuContent align="end">
-                                                    <DropdownMenuItem onSelect={() => openDialog('addPayment', user)}><FilePlus className="mr-2 h-4 w-4"/>Add Single Payment</DropdownMenuItem>
+                                                    {/* FIX: Removed "Add Single Payment" option */}
                                                     <DropdownMenuItem onSelect={() => openDialog('addMissedBill', user)}><FileMinus className="mr-2 h-4 w-4"/>Add Missed Bill</DropdownMenuItem>
                                                     <DropdownMenuItem onSelect={() => openPayBillsDialog(user)}><CreditCard className="mr-2 h-4 w-4"/>Pay Bills</DropdownMenuItem>
                                                     <DropdownMenuItem onSelect={() => openDialog('recalculate', user)}><RefreshCw className="mr-2 h-4 w-4"/>Bulk Record / Recalculate</DropdownMenuItem>
@@ -142,17 +142,6 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
             </main>
 
             {/* ALL DIALOGS */}
-            <Dialog open={dialogs.addPayment} onOpenChange={(open) => !open && closeAllDialogs()}>
-                <DialogContent>
-                    <DialogHeader><DialogTitle>Add Single Payment for {selectedUser?.name}</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleFormSubmit(e, actions.addSinglePaymentAction)} className="space-y-4 pt-4">
-                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="amount" className="text-right">Amount</Label><Input id="amount" name="amount" type="number" step="0.01" className="col-span-3" required /></div>
-                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="date" className="text-right">Date</Label><Input id="date" name="date" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="col-span-3" required /></div>
-                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="notes" className="text-right">Notes</Label><Textarea id="notes" name="notes" placeholder="Optional notes..." className="col-span-3" /></div>
-                        <DialogFooter><Button type="submit" disabled={isPending}>{isPending ? <Loader2 className="animate-spin" /> : "Record Payment"}</Button></DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
 
             <Dialog open={dialogs.addMissedBill} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent>
@@ -185,7 +174,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
 
             <Dialog open={dialogs.add} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent><DialogHeader><DialogTitle>Add New User</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleAction(() => actions.addUserAction(new FormData(e.currentTarget)))} className="space-y-4 pt-4">
+                    <form onSubmit={(e) => { e.preventDefault(); handleAction(() => actions.addUserAction(new FormData(e.currentTarget))); }} className="space-y-4 pt-4">
                         <div className="grid grid-cols-4 items-center gap-4">
                             <Label htmlFor="name" className="text-right">Name</Label>
                             <Input id="name" name="name" placeholder="Full Name" className="col-span-3" required />
