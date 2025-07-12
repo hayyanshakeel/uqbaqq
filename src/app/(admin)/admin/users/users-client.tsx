@@ -64,7 +64,8 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
 
     const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>, action: (formData: FormData) => void) => {
         e.preventDefault();
-        action(new FormData(e.currentTarget));
+        const formData = new FormData(e.currentTarget);
+        startTransition(() => action(formData));
     };
 
     const openDialog = (dialog: keyof typeof dialogs, user?: User) => {
@@ -155,8 +156,27 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
             <Dialog open={dialogs.add} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent><DialogHeader><DialogTitle>Add New User</DialogTitle></DialogHeader>
                     <form onSubmit={(e) => handleFormSubmit(e, actions.addUserAction)} className="space-y-4 pt-4">
-                        {/* Form fields here */}
-                        <DialogFooter><Button type="submit" disabled={isPending}>{isPending ? <Loader2 className="animate-spin" /> : "Save"}</Button></DialogFooter>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="name" className="text-right">Name</Label>
+                            <Input id="name" name="name" placeholder="Full Name" className="col-span-3" required />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="email" className="text-right">Email</Label>
+                            <Input id="email" name="email" type="email" placeholder="user@example.com" className="col-span-3" required />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="phone" className="text-right">Phone</Label>
+                            <Input id="phone" name="phone" type="tel" placeholder="10-digit number" className="col-span-3" required />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="password" className="text-right">Password</Label>
+                            <Input id="password" name="password" type="password" placeholder="Min. 6 characters" className="col-span-3" required />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="joining_date" className="text-right">Joining Date</Label>
+                            <Input id="joining_date" name="joining_date" type="date" className="col-span-3" required />
+                        </div>
+                        <DialogFooter><Button type="submit" disabled={isPending}>{isPending ? <Loader2 className="animate-spin" /> : "Save User"}</Button></DialogFooter>
                     </form>
                 </DialogContent>
             </Dialog>
@@ -164,7 +184,18 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
             <Dialog open={dialogs.edit} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent><DialogHeader><DialogTitle>Edit User</DialogTitle></DialogHeader>
                     <form onSubmit={(e) => handleFormSubmit(e, (fd) => actions.updateUserAction(selectedUser!.id, fd))} className="space-y-4 pt-4">
-                        {/* Form fields here */}
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="edit-name" className="text-right">Name</Label>
+                            <Input id="edit-name" name="name" defaultValue={selectedUser?.name} className="col-span-3" required />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="edit-email" className="text-right">Email</Label>
+                            <Input id="edit-email" name="email" type="email" defaultValue={selectedUser?.email} className="col-span-3" required />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="edit-phone" className="text-right">Phone</Label>
+                            <Input id="edit-phone" name="phone" type="tel" defaultValue={selectedUser?.phone} className="col-span-3" required />
+                        </div>
                         <DialogFooter><Button type="submit" disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Save Changes"}</Button></DialogFooter>
                     </form>
                 </DialogContent>
