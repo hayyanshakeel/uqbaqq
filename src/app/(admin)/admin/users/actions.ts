@@ -367,7 +367,7 @@ export async function recordPaymentAction(formData: FormData) {
             const userDoc = await transaction.get(userRef);
             if (!userDoc.exists) throw new Error('User not found!');
             
-            const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending').orderBy('dueDate', 'asc');
+            const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending');
             const pendingBillsSnapshot = await transaction.get(pendingBillsQuery);
 
             // --- WRITES AFTER ---
@@ -381,9 +381,13 @@ export async function recordPaymentAction(formData: FormData) {
                 status: newPending <= 0 ? 'paid' : 'pending'
             });
 
-            // Mark oldest bills as paid
+            // Sort bills by date in memory before processing
+            const sortedPendingBills = pendingBillsSnapshot.docs.sort((a, b) => 
+                a.data().dueDate.toDate().getTime() - b.data().dueDate.toDate().getTime()
+            );
+
             let remainingAmountToApply = amount;
-            for (const doc of pendingBillsSnapshot.docs) {
+            for (const doc of sortedPendingBills) {
                 if (remainingAmountToApply > 0) {
                     const billAmount = doc.data().amount;
                     if (remainingAmountToApply >= billAmount) {
