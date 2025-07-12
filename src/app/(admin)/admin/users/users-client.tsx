@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { PlusCircle, Search, MoreHorizontal, Trash2, CreditCard, Loader2, Undo2, Edit, HeartCrack, Send, RefreshCw, FilePlus, FileMinus } from "lucide-react";
+import { PlusCircle, MoreHorizontal, Trash2, CreditCard, Loader2, Undo2, Edit, HeartCrack, Send, RefreshCw, FilePlus, FileMinus } from "lucide-react";
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import type { User, Bill } from '@/lib/data-service';
@@ -65,10 +65,11 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
         });
     };
 
-    const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>, action: (formData: FormData) => Promise<{ success: boolean; message: string; }>) => {
+    const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>, action: (userId: string, formData: FormData) => void) => {
         e.preventDefault();
+        if (!selectedUser) return;
         const formData = new FormData(e.currentTarget);
-        handleAction(() => action(formData));
+        handleAction(action, selectedUser.id, formData);
     };
 
     const openDialog = (dialog: keyof typeof dialogs, user?: User) => {
@@ -144,7 +145,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
             <Dialog open={dialogs.addPayment} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent>
                     <DialogHeader><DialogTitle>Add Single Payment for {selectedUser?.name}</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleFormSubmit(e, (fd) => actions.addSinglePaymentAction(selectedUser!.id, fd))} className="space-y-4 pt-4">
+                    <form onSubmit={(e) => handleFormSubmit(e, actions.addSinglePaymentAction)} className="space-y-4 pt-4">
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="amount" className="text-right">Amount</Label><Input id="amount" name="amount" type="number" step="0.01" className="col-span-3" required /></div>
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="date" className="text-right">Date</Label><Input id="date" name="date" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="col-span-3" required /></div>
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="notes" className="text-right">Notes</Label><Textarea id="notes" name="notes" placeholder="Optional notes..." className="col-span-3" /></div>
@@ -156,7 +157,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
             <Dialog open={dialogs.addMissedBill} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent>
                     <DialogHeader><DialogTitle>Add Missed Bill for {selectedUser?.name}</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleFormSubmit(e, (fd) => actions.addMissedBillAction(selectedUser!.id, fd))} className="space-y-4 pt-4">
+                    <form onSubmit={(e) => handleFormSubmit(e, actions.addMissedBillAction)} className="space-y-4 pt-4">
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="amount" className="text-right">Amount</Label><Input id="amount" name="amount" type="number" step="0.01" className="col-span-3" required /></div>
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="date" className="text-right">Bill Date</Label><Input id="date" name="date" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="col-span-3" required /></div>
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="notes" className="text-right">Notes</Label><Textarea id="notes" name="notes" placeholder="e.g., Monthly bill for January 2024" className="col-span-3" required /></div>
@@ -184,7 +185,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
 
             <Dialog open={dialogs.add} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent><DialogHeader><DialogTitle>Add New User</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleFormSubmit(e, actions.addUserAction)} className="space-y-4 pt-4">
+                    <form onSubmit={(e) => handleAction(() => actions.addUserAction(new FormData(e.currentTarget)))} className="space-y-4 pt-4">
                         <div className="grid grid-cols-4 items-center gap-4">
                             <Label htmlFor="name" className="text-right">Name</Label>
                             <Input id="name" name="name" placeholder="Full Name" className="col-span-3" required />
@@ -212,7 +213,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
 
             <Dialog open={dialogs.edit} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent><DialogHeader><DialogTitle>Edit User</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleFormSubmit(e, (fd) => actions.updateUserAction(selectedUser!.id, fd))} className="space-y-4 pt-4">
+                    <form onSubmit={(e) => handleFormSubmit(e, actions.updateUserAction)} className="space-y-4 pt-4">
                         <div className="grid grid-cols-4 items-center gap-4">
                             <Label htmlFor="edit-name" className="text-right">Name</Label>
                             <Input id="edit-name" name="name" defaultValue={selectedUser?.name} className="col-span-3" required />
@@ -233,7 +234,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
             <Dialog open={dialogs.recalculate} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent>
                     <DialogHeader><DialogTitle>Recalculate Balance</DialogTitle><DialogDescription>Select month up to which user is paid. Resets history.</DialogDescription></DialogHeader>
-                    <form onSubmit={(e) => handleFormSubmit(e, (fd) => actions.recalculateBalanceUntilDateAction(selectedUser!.id, fd))} className="space-y-4 pt-4">
+                    <form onSubmit={(e) => handleFormSubmit(e, actions.recalculateBalanceUntilDateAction)} className="space-y-4 pt-4">
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="untilMonth" className="text-right">Paid Until</Label><Input id="untilMonth" name="untilMonth" type="month" required className="col-span-3"/></div>
                         <DialogFooter><Button type="submit" disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Recalculate"}</Button></DialogFooter>
                     </form>
@@ -242,7 +243,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
             
             <Dialog open={dialogs.deceased} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent><DialogHeader><DialogTitle>Mark as Deceased</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleFormSubmit(e, (fd) => actions.markAsDeceasedAction(selectedUser!.id, fd))} className="space-y-4 pt-4">
+                    <form onSubmit={(e) => handleFormSubmit(e, actions.markAsDeceasedAction)} className="space-y-4 pt-4">
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="dateOfDeath" className="text-right">Date of Death</Label><Input id="dateOfDeath" name="dateOfDeath" type="date" required className="col-span-3"/></div>
                         <DialogFooter><Button variant="destructive" type="submit" disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Confirm"}</Button></DialogFooter>
                     </form>
