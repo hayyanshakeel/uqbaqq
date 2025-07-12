@@ -11,7 +11,8 @@ import type { Bill } from '@/lib/data-service';
 const UserSchema = z.object({
   name: z.string().min(1, 'Name is required.'),
   email: z.string().email('Invalid email address.'),
-  phone: z.string().min(1, 'Phone number is required.'),
+  // FIX: Added a regular expression to ensure the phone number is exactly 10 digits.
+  phone: z.string().regex(/^\d{10}$/, 'Phone number must be 10 digits.'),
   password: z.string().min(6, 'Password must be at least 6 characters long.'),
   joining_date: z.string().min(1, 'Joining date is required.'),
 });
@@ -32,12 +33,18 @@ export async function addUserAction(formData: FormData) {
 
     if (!validatedFields.success) {
         console.error("Validation failed:", validatedFields.error.flatten().fieldErrors);
-        return { success: false, message: 'Please fill out all fields correctly.' };
+        // Return the specific validation error message to the client for better UX.
+        const firstError = Object.values(validatedFields.error.flatten().fieldErrors)[0]?.[0];
+        return { success: false, message: firstError || 'Please fill out all fields correctly.' };
     }
 
     const { name, email, phone, password, joining_date } = validatedFields.data;
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
+
+    // FIX: Format the phone number to E.164 standard by adding the country code.
+    // This assumes an Indian country code (+91).
+    const formattedPhoneNumber = `+91${phone}`;
 
     try {
         // Create user in Firebase Authentication
@@ -46,31 +53,36 @@ export async function addUserAction(formData: FormData) {
             emailVerified: true,
             password: password,
             displayName: name,
-            phoneNumber: phone,
+            phoneNumber: formattedPhoneNumber, // Use the correctly formatted number
         });
 
         // Add user data to Firestore
         await adminDb.collection('users').doc(userRecord.uid).set({
             name,
             email,
-            phone,
+            phone: formattedPhoneNumber, // Store the formatted number
             joined: joining_date,
-            status: 'pending', // Initial status
+            status: 'pending',
             totalPaid: 0,
-            pending: 0, // Will be calculated if needed, starting at 0
+            pending: 0,
             createdAt: new Date(),
         });
         
-        // Revalidate the users page to show the new user
         revalidatePath('/admin/users');
         return { success: true, message: 'User added successfully!' };
 
     } catch (error: any) {
         console.error('Error adding user:', error);
-        // Provide a more specific error message if available
-        const message = error.code === 'auth/email-already-exists'
-            ? 'A user with this email already exists.'
-            : 'Failed to add user.';
+        
+        let message = 'Failed to add user.';
+        if (error.code === 'auth/email-already-exists') {
+            message = 'A user with this email already exists.';
+        } else if (error.code === 'auth/invalid-phone-number') {
+            message = 'The phone number is invalid. Please ensure it is a valid 10-digit number.';
+        } else if (error.message) {
+            message = error.message;
+        }
+        
         return { success: false, message };
     }
 }
