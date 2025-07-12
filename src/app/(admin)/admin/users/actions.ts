@@ -2,42 +2,79 @@
 
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
+import { z } from 'zod';
 import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid, format, isAfter } from 'date-fns';
-import { getBillingSettings } from '@/app/(admin)/admin/settings/actions';
-import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 import * as admin from 'firebase-admin';
-import { Bill } from '@/lib/data-service';
+import type { Bill } from '@/lib/data-service';
 
-const feeStructure = [
-    { start: '2001-05-01', end: '2007-04-30', fee: 30 },
-    { start: '2007-05-01', end: '2014-04-30', fee: 50 },
-    { start: '2014-05-01', end: '2019-06-30', fee: 100 },
-    { start: '2019-07-01', end: '2024-03-31', fee: 200 },
-    { start: '2024-04-01', end: '9999-12-31', fee: 250 }
-];
+// Schema for validating new user data from the form
+const UserSchema = z.object({
+  name: z.string().min(1, 'Name is required.'),
+  email: z.string().email('Invalid email address.'),
+  phone: z.string().min(1, 'Phone number is required.'),
+  password: z.string().min(6, 'Password must be at least 6 characters long.'),
+  joining_date: z.string().min(1, 'Joining date is required.'),
+});
 
-function calculateDuesForPeriod(startDateStr: string, endDateStr: string): { totalDues: number; monthlyBreakdown: { month: Date, fee: number }[] } {
-    const startDate = startOfMonth(parse(startDateStr, 'yyyy-MM-dd', new Date()));
-    const endDate = startOfMonth(parse(endDateStr, 'yyyy-MM-dd', new Date()));
-    let totalDues = 0;
-    const monthlyBreakdown: { month: Date, fee: number }[] = [];
-    if (!isValid(startDate) || !isValid(endDate) || startDate > endDate) return { totalDues: 0, monthlyBreakdown: [] };
-    const totalMonths = differenceInMonths(endDate, startDate) + 1;
+/**
+ * Creates a new user in Firebase Auth and Firestore.
+ */
+export async function addUserAction(formData: FormData) {
+    const rawData = {
+        name: formData.get('name'),
+        email: formData.get('email'),
+        phone: formData.get('phone'),
+        password: formData.get('password'),
+        joining_date: formData.get('joining_date'),
+    };
 
-    for (let i = 0; i < totalMonths; i++) {
-        const monthDate = addMonths(startDate, i);
-        const applicableTier = feeStructure.find(tier => {
-            const tierStart = parse(tier.start, 'yyyy-MM-dd', new Date());
-            const tierEnd = parse(tier.end, 'yyyy-MM-dd', new Date());
-            return monthDate >= tierStart && monthDate <= tierEnd;
-        });
-        if (applicableTier) {
-            totalDues += applicableTier.fee;
-            monthlyBreakdown.push({ month: monthDate, fee: applicableTier.fee });
-        }
+    const validatedFields = UserSchema.safeParse(rawData);
+
+    if (!validatedFields.success) {
+        console.error("Validation failed:", validatedFields.error.flatten().fieldErrors);
+        return { success: false, message: 'Please fill out all fields correctly.' };
     }
-    return { totalDues, monthlyBreakdown };
+
+    const { name, email, phone, password, joining_date } = validatedFields.data;
+    const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
+
+    try {
+        // Create user in Firebase Authentication
+        const userRecord = await adminAuth.createUser({
+            email: email,
+            emailVerified: true,
+            password: password,
+            displayName: name,
+            phoneNumber: phone,
+        });
+
+        // Add user data to Firestore
+        await adminDb.collection('users').doc(userRecord.uid).set({
+            name,
+            email,
+            phone,
+            joined: joining_date,
+            status: 'pending', // Initial status
+            totalPaid: 0,
+            pending: 0, // Will be calculated if needed, starting at 0
+            createdAt: new Date(),
+        });
+        
+        // Revalidate the users page to show the new user
+        revalidatePath('/admin/users');
+        return { success: true, message: 'User added successfully!' };
+
+    } catch (error: any) {
+        console.error('Error adding user:', error);
+        // Provide a more specific error message if available
+        const message = error.code === 'auth/email-already-exists'
+            ? 'A user with this email already exists.'
+            : 'Failed to add user.';
+        return { success: false, message };
+    }
 }
+
 
 export async function getPendingBillsForUserAction(userId: string): Promise<Bill[]> {
     if (!userId) return [];
@@ -89,94 +126,6 @@ export async function markBillAsPaidAction(userId: string, billId: string, billA
         return { success: true, message: 'Bill marked as paid!' };
     } catch (error: any) {
         return { success: false, message: error.message || 'Failed to mark bill as paid.' };
-    }
-}
-
-export async function recalculateBalanceUntilDateAction(userId: string, formData: FormData) {
-    const untilMonthStr = formData.get('untilMonth') as string;
-    if (!userId || !untilMonthStr) return { success: false, message: 'Required fields are missing.' };
-    const adminDb = getAdminDb();
-    const userRef = adminDb.collection('users').doc(userId);
-    const untilDate = lastDayOfMonth(new Date(`${untilMonthStr}-01T12:00:00Z`));
-    const today = new Date();
-
-    try {
-        await adminDb.runTransaction(async (transaction) => {
-            const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) throw new Error('User not found!');
-            
-            const userData = userDoc.data()!;
-            const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
-            const billsQuery = adminDb.collection('bills').where('userId', '==', userId);
-            const paymentsQuery = adminDb.collection('payments').where('userId', '==', userId);
-            const [billsSnapshot, paymentsSnapshot] = await Promise.all([transaction.get(billsQuery), transaction.get(paymentsQuery)]);
-            
-            billsSnapshot.forEach(doc => transaction.delete(doc.ref));
-            paymentsSnapshot.forEach(doc => transaction.delete(doc.ref));
-
-            const { totalDues: paidAmount } = calculateDuesForPeriod(joiningDate, format(untilDate, 'yyyy-MM-dd'));
-            if (paidAmount > 0) {
-                transaction.set(adminDb.collection('payments').doc(), {
-                    userId, amount: paidAmount, date: untilDate,
-                    notes: `Bulk historic payment up to ${format(untilDate, 'MMM yyyy')}.`,
-                    type: 'manual_recalculation', createdAt: new Date()
-                });
-            }
-
-            let newPending = 0;
-            const pendingPeriodStart = startOfMonth(addMonths(untilDate, 1));
-            if (isAfter(today, pendingPeriodStart)) {
-                const { monthlyBreakdown: pendingBills } = calculateDuesForPeriod(format(pendingPeriodStart, 'yyyy-MM-dd'), format(today, 'yyyy-MM-dd'));
-                newPending = pendingBills.reduce((acc, bill) => acc + bill.fee, 0);
-                pendingBills.forEach(bill => {
-                    transaction.set(adminDb.collection('bills').doc(), {
-                        userId, amount: bill.fee, dueDate: bill.month,
-                        notes: `Bill for ${format(bill.month, 'MMMM yyyy')}`,
-                        status: 'pending', createdAt: new Date()
-                    });
-                });
-            }
-
-            transaction.update(userRef, { totalPaid: paidAmount, pending: newPending, status: newPending <= 0 ? 'paid' : 'pending' });
-        });
-        revalidatePath('/admin/users');
-        revalidatePath('/dashboard');
-        return { success: true, message: `Balance recalculated successfully.` };
-    } catch (error: any) {
-        return { success: false, message: error.message || 'Failed to recalculate.' };
-    }
-}
-
-export async function reverseLastPaymentAction(userId: string) {
-    const adminDb = getAdminDb();
-    if (!userId) return { success: false, message: 'User ID is required.' };
-
-    try {
-        const paymentsQuery = adminDb.collection('payments').where('userId', '==', userId).orderBy('createdAt', 'desc').limit(1);
-        const paymentSnapshot = await paymentsQuery.get();
-        if (paymentSnapshot.empty) return { success: false, message: 'No payments to reverse.' };
-        
-        const lastPaymentDoc = paymentSnapshot.docs[0];
-        const amountToReverse = lastPaymentDoc.data().amount;
-        const userRef = adminDb.collection('users').doc(userId);
-
-        await adminDb.runTransaction(async (transaction) => {
-            const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) throw new Error('User not found!');
-            
-            transaction.update(userRef, {
-                totalPaid: admin.firestore.FieldValue.increment(-amountToReverse),
-                pending: admin.firestore.FieldValue.increment(amountToReverse),
-                status: 'pending'
-            });
-            transaction.delete(lastPaymentDoc.ref);
-        });
-
-        revalidatePath('/admin/users');
-        revalidatePath('/dashboard');
-        return { success: true, message: `Successfully reversed last payment of ₹${amountToReverse}.` };
-    } catch (error: any) {
-        return { success: false, message: 'Failed to reverse payment.' };
     }
 }
 
