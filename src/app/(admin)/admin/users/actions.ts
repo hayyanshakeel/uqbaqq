@@ -6,6 +6,7 @@ import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isV
 import { getBillingSettings } from '@/app/(admin)/admin/settings/actions';
 import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 import * as admin from 'firebase-admin';
+import { Bill } from '@/lib/data-service';
 
 // --- Fee Structure Definition ---
 const feeStructure = [
@@ -48,6 +49,86 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): { tot
     }
     return { totalDues, monthlyBreakdown };
 }
+
+// NEW ACTION: Fetch pending bills for the admin modal
+export async function getPendingBillsForUserAction(userId: string): Promise<Bill[]> {
+    if (!userId) return [];
+    const adminDb = getAdminDb();
+    const billsSnapshot = await adminDb.collection('bills')
+        .where('userId', '==', userId)
+        .where('status', '==', 'pending')
+        .orderBy('dueDate', 'asc')
+        .get();
+
+    if (billsSnapshot.empty) {
+        return [];
+    }
+
+    return billsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+            id: doc.id,
+            amount: data.amount,
+            date: format(data.dueDate.toDate(), 'dd/MM/yyyy'),
+            notes: data.notes,
+        };
+    });
+}
+
+// NEW ACTION: Mark a specific bill as paid
+export async function markBillAsPaidAction(userId: string, billId: string, billAmount: number) {
+    if (!userId || !billId || !billAmount) {
+        return { success: false, message: 'User ID, Bill ID, and amount are required.' };
+    }
+
+    const adminDb = getAdminDb();
+    const userRef = adminDb.collection('users').doc(userId);
+    const billRef = adminDb.collection('bills').doc(billId);
+
+    try {
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error('User not found');
+            
+            const billDoc = await transaction.get(billRef);
+            if (!billDoc.exists) throw new Error('Bill not found');
+
+            const userData = userDoc.data()!;
+            const newTotalPaid = (userData.totalPaid || 0) + billAmount;
+            const newPending = (userData.pending || 0) - billAmount;
+
+            // Update user's main balance
+            transaction.update(userRef, {
+                totalPaid: newTotalPaid,
+                pending: newPending < 0 ? 0 : newPending,
+                status: newPending <= 0 ? 'paid' : 'pending'
+            });
+
+            // Mark the specific bill as paid
+            transaction.update(billRef, { status: 'paid' });
+
+            // Create a corresponding payment record
+            const paymentRef = adminDb.collection('payments').doc();
+            transaction.set(paymentRef, {
+                userId,
+                amount: billAmount,
+                date: new Date(),
+                notes: `Manual payment for bill: ${billDoc.data()?.notes || billId}`,
+                type: 'manual_bill_payment',
+                createdAt: new Date()
+            });
+        });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+        revalidatePath('/dashboard');
+        return { success: true, message: 'Bill marked as paid successfully!' };
+    } catch (error: any) {
+        console.error("Error marking bill as paid:", error);
+        return { success: false, message: error.message || 'Failed to mark bill as paid.' };
+    }
+}
+
 
 export async function sendPaymentLinkAction(userId: string) {
     if (!userId) {
