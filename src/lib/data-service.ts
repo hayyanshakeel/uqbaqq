@@ -89,10 +89,8 @@ export async function getPaymentOverview() {
 
     paymentsSnapshot.forEach(doc => {
         const payment = doc.data();
-        // FIX: Added a robust check to handle different date formats safely.
         const paymentDate = payment.date?.toDate ? payment.date.toDate() : new Date(payment.date);
 
-        // Skip this record if the date is not valid
         if (!isValid(paymentDate)) {
             console.warn(`Skipping payment with invalid date: ${doc.id}`);
             return;
@@ -147,31 +145,36 @@ export async function getUsersWithPendingPayments(): Promise<Pick<User, 'id' | '
     return users.filter(user => user.email?.toLowerCase() !== ADMIN_EMAIL).slice(0, 5);
 }
 
+// FIX: This function has been rewritten to be more efficient and avoid server errors.
 export async function getAllUsers(): Promise<User[]> {
     const adminDb = getAdminDb();
-    const snapshot = await adminDb.collection('users').orderBy('name').get();
+    
+    // Step 1: Fetch all users and all payments in parallel to be efficient.
+    const [usersSnapshot, paymentsSnapshot] = await Promise.all([
+        adminDb.collection('users').orderBy('name').get(),
+        adminDb.collection('payments').orderBy('date', 'desc').get()
+    ]);
 
-    if (snapshot.empty) {
+    if (usersSnapshot.empty) {
         return [];
     }
 
-    const users = await Promise.all(snapshot.docs.map(async (doc) => {
+    // Step 2: Create a map of the most recent payment date for each user.
+    // This is much faster than querying for each user individually.
+    const lastPayments = new Map<string, string>();
+    paymentsSnapshot.forEach(doc => {
+        const payment = doc.data();
+        const userId = payment.userId;
+        // Since payments are ordered by date descending, the first one we find for a user is the latest.
+        if (userId && !lastPayments.has(userId) && payment.date) {
+            lastPayments.set(userId, format(payment.date.toDate(), 'dd/MM/yyyy'));
+        }
+    });
+
+    // Step 3: Map the user data and add the last payment date from our map.
+    const users = usersSnapshot.docs.map(doc => {
         const data = doc.data();
         const joinedDate = data.joined ? new Date(data.joined) : new Date();
-
-        const paymentsSnapshot = await adminDb.collection('payments')
-            .where('userId', '==', doc.id)
-            .orderBy('date', 'desc')
-            .limit(1)
-            .get();
-
-        let lastPaidOn = 'N/A';
-        if (!paymentsSnapshot.empty) {
-            const lastPayment = paymentsSnapshot.docs[0].data();
-            if (lastPayment.date) {
-                lastPaidOn = format(lastPayment.date.toDate(), 'dd/MM/yyyy');
-            }
-        }
 
         return {
             id: doc.id,
@@ -182,10 +185,11 @@ export async function getAllUsers(): Promise<User[]> {
             totalPaid: data.totalPaid || 0,
             pending: data.pending || 0,
             email: data.email || undefined,
-            lastPaidOn: lastPaidOn,
+            lastPaidOn: lastPayments.get(doc.id) || 'N/A', // Get the date from the map
         };
-    }));
+    });
 
+    // Filter out the admin user from the final list.
     return users.filter(user => user.email?.toLowerCase() !== ADMIN_EMAIL);
 }
 
