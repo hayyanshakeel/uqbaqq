@@ -50,7 +50,7 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): { tot
     return { totalDues, monthlyBreakdown };
 }
 
-// NEW ACTION: Fetch pending bills for the admin modal
+// ACTION: Fetch pending bills for the admin modal
 export async function getPendingBillsForUserAction(userId: string): Promise<Bill[]> {
     if (!userId) return [];
     const adminDb = getAdminDb();
@@ -75,7 +75,7 @@ export async function getPendingBillsForUserAction(userId: string): Promise<Bill
     });
 }
 
-// NEW ACTION: Mark a specific bill as paid
+// ACTION: Mark a specific bill as paid
 export async function markBillAsPaidAction(userId: string, billId: string, billAmount: number) {
     if (!userId || !billId || !billAmount) {
         return { success: false, message: 'User ID, Bill ID, and amount are required.' };
@@ -121,7 +121,7 @@ export async function markBillAsPaidAction(userId: string, billId: string, billA
 
         revalidatePath('/admin/users');
         revalidatePath('/admin/dashboard');
-        revalidatePath('/dashboard');
+        revalidatePath(`/dashboard`); // Revalidate user's dashboard
         return { success: true, message: 'Bill marked as paid successfully!' };
     } catch (error: any) {
         console.error("Error marking bill as paid:", error);
@@ -427,81 +427,6 @@ export async function deleteUserAction(userId: string) {
     }
 }
 
-export async function recordPaymentAction(formData: FormData) {
-    const adminDb = getAdminDb();
-    const userId = formData.get('userId') as string;
-    const amountStr = formData.get('amount') as string;
-    const paymentDateStr = formData.get('paymentDate') as string;
-    const notes = formData.get('notes') as string | null;
-
-    const amount = parseFloat(amountStr);
-
-    if (!userId || !amountStr || !paymentDateStr || isNaN(amount) || amount <= 0) {
-        return { success: false, message: 'Please provide a valid user, amount, and date.' };
-    }
-
-    try {
-        const userRef = adminDb.collection('users').doc(userId);
-
-        await adminDb.runTransaction(async (transaction) => {
-            // --- READS FIRST ---
-            const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) throw new Error('User not found!');
-            
-            const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending');
-            const pendingBillsSnapshot = await transaction.get(pendingBillsQuery);
-
-            // --- WRITES AFTER ---
-            const userData = userDoc.data()!;
-            const newTotalPaid = (userData.totalPaid || 0) + amount;
-            const newPending = (userData.pending || 0) - amount;
-
-            transaction.update(userRef, {
-                totalPaid: newTotalPaid,
-                pending: newPending < 0 ? 0 : newPending,
-                status: newPending <= 0 ? 'paid' : 'pending'
-            });
-
-            // Sort bills by date in memory before processing
-            const sortedPendingBills = pendingBillsSnapshot.docs.sort((a, b) => 
-                a.data().dueDate.toDate().getTime() - b.data().dueDate.toDate().getTime()
-            );
-
-            let remainingAmountToApply = amount;
-            for (const doc of sortedPendingBills) {
-                if (remainingAmountToApply > 0) {
-                    const billAmount = doc.data().amount;
-                    if (remainingAmountToApply >= billAmount) {
-                        transaction.update(doc.ref, { status: 'paid' });
-                        remainingAmountToApply -= billAmount;
-                    }
-                } else {
-                    break;
-                }
-            }
-            
-            const paymentRef = adminDb.collection('payments').doc();
-            transaction.set(paymentRef, {
-                userId,
-                amount,
-                date: new Date(paymentDateStr),
-                notes: notes || `Payment recorded on ${new Date(paymentDateStr).toLocaleDateString()}`,
-                type: 'manual_record',
-                createdAt: new Date()
-            });
-        });
-
-        revalidatePath('/admin/users');
-        revalidatePath('/admin/dashboard');
-        revalidatePath(`/dashboard`);
-        return { success: true, message: `Payment of ₹${amount.toFixed(2)} recorded.` };
-    } catch (error: any) {
-        console.error('Error recording payment:', error);
-        const message = error instanceof Error ? error.message : 'Failed to record payment.';
-        return { success: false, message };
-    }
-}
-
 export async function addMissedBillAction(formData: FormData) {
     const adminDb = getAdminDb();
     const userId = formData.get('userId') as string;
@@ -733,7 +658,7 @@ export async function splitMissedBillAction(formData: FormData) {
                 userId,
                 amount: currentMonthAmountInCents / 100,
                 dueDate: billingDate,
-                notes: `Bill for ${format(billingDate, 'MMMM yyyy')}`, // Corrected format string
+                notes: `Bill for ${format(billingDate, 'MMMM yyyy')}`,
                 status: 'pending',
                 createdAt: new Date()
             });
