@@ -145,11 +145,10 @@ export async function getUsersWithPendingPayments(): Promise<Pick<User, 'id' | '
     return users.filter(user => user.email?.toLowerCase() !== ADMIN_EMAIL).slice(0, 5);
 }
 
-// FIX: This function has been rewritten to be more efficient and avoid server errors.
+// FIX: This function has been rewritten to be more defensive and avoid server errors.
 export async function getAllUsers(): Promise<User[]> {
     const adminDb = getAdminDb();
     
-    // Step 1: Fetch all users and all payments in parallel to be efficient.
     const [usersSnapshot, paymentsSnapshot] = await Promise.all([
         adminDb.collection('users').orderBy('name').get(),
         adminDb.collection('payments').orderBy('date', 'desc').get()
@@ -159,14 +158,11 @@ export async function getAllUsers(): Promise<User[]> {
         return [];
     }
 
-    // Step 2: Create a map of the most recent payment date for each user.
-    // This is much faster than querying for each user individually.
     const lastPayments = new Map<string, string>();
     paymentsSnapshot.forEach(doc => {
         const payment = doc.data();
         const userId = payment.userId;
         if (userId && !lastPayments.has(userId) && payment.date) {
-            // FIX: Safely handle date conversion
             const paymentDate = payment.date.toDate ? payment.date.toDate() : new Date(payment.date);
             if (isValid(paymentDate)) {
                 lastPayments.set(userId, format(paymentDate, 'dd/MM/yyyy'));
@@ -174,35 +170,41 @@ export async function getAllUsers(): Promise<User[]> {
         }
     });
 
-    // Step 3: Map the user data and add the last payment date from our map.
     const users = usersSnapshot.docs.map(doc => {
-        const data = doc.data();
-        
-        let joinedDateStr = 'N/A';
-        // FIX: Safely handle the 'joined' date, checking for its existence and validity.
-        if (data.joined) {
-            const dateObj = data.joined.toDate ? data.joined.toDate() : new Date(data.joined);
-            if (isValid(dateObj)) {
-                joinedDateStr = format(dateObj, 'dd/MM/yyyy');
+        try {
+            const data = doc.data();
+            
+            let joinedDateStr = 'N/A';
+            if (data.joined) {
+                const dateObj = data.joined.toDate ? data.joined.toDate() : new Date(data.joined);
+                if (isValid(dateObj)) {
+                    joinedDateStr = format(dateObj, 'dd/MM/yyyy');
+                }
             }
+    
+            return {
+                id: doc.id,
+                name: data.name || 'N/A',
+                phone: data.phone || 'N/A',
+                status: data.status || 'pending',
+                joined: joinedDateStr,
+                totalPaid: data.totalPaid || 0,
+                pending: data.pending || 0,
+                email: data.email || undefined,
+                lastPaidOn: lastPayments.get(doc.id) || 'N/A',
+            };
+        } catch (error) {
+            console.error(`Error processing user document ${doc.id}:`, error);
+            return null; // Return null for invalid documents to avoid crashing
         }
-
-        return {
-            id: doc.id,
-            name: data.name || 'N/A',
-            phone: data.phone || 'N/A',
-            status: data.status || 'pending',
-            joined: joinedDateStr,
-            totalPaid: data.totalPaid || 0,
-            pending: data.pending || 0,
-            email: data.email || undefined,
-            lastPaidOn: lastPayments.get(doc.id) || 'N/A',
-        };
-    });
+    }).filter((user): user is User => user !== null); // Filter out any nulls that resulted from an error
 
     // Filter out the admin user from the final list.
     return users.filter(user => {
-        return typeof user.email !== 'string' || user.email.toLowerCase() !== ADMIN_EMAIL;
+        if (!user.email) { // Keep users that don't have an email property
+            return true;
+        }
+        return user.email.toLowerCase() !== ADMIN_EMAIL;
     });
 }
 
