@@ -12,16 +12,16 @@ import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import type { User } from '@/lib/data-service';
-import {
-    addUserAction,
-    deleteUserAction,
-    recordPaymentAction,
-    addMissedBillAction,
-    reverseLastPaymentAction,
-    reverseLastBillAction,
-    updateUserAction,
-    recalculateBalanceUntilDateAction,
-    markAsDeceasedAction,
+import { 
+    addUserAction, 
+    deleteUserAction, 
+    recordPaymentAction, 
+    addMissedBillAction, 
+    reverseLastPaymentAction, 
+    reverseLastBillAction, 
+    updateUserAction, 
+    recalculateBalanceUntilDateAction, 
+    markAsDeceasedAction, 
     sendPaymentLinkAction,
     getPendingMonthsForUser,
     splitMissedBillAction
@@ -418,6 +418,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                     <TableRow>
                                         <TableHead>Name</TableHead>
                                         <TableHead>Status</TableHead>
+                                        <TableHead>Joined</TableHead>
                                         <TableHead>Last Paid</TableHead>
                                         <TableHead className="text-right">Total Paid</TableHead>
                                         <TableHead className="text-right">Pending</TableHead>
@@ -433,6 +434,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                                     {user.status}
                                                 </Badge>
                                             </TableCell>
+                                            <TableCell>{user.joined}</TableCell>
                                             <TableCell>{user.lastPaidOn}</TableCell>
                                             <TableCell className="text-right">₹{user.totalPaid.toFixed(2)}</TableCell>
                                             <TableCell className="text-right text-destructive font-semibold">₹{user.pending.toFixed(2)}</TableCell>
@@ -467,6 +469,10 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                             <Badge variant={user.status === 'paid' ? 'default' : user.status === 'deceased' ? 'destructive' : 'secondary'}>
                                                 {user.status}
                                             </Badge>
+                                        </div>
+                                        <div className="flex justify-between items-center text-sm">
+                                            <span className="text-muted-foreground">Joined</span>
+                                            <span>{user.joined}</span>
                                         </div>
                                         <div className="flex justify-between items-center text-sm">
                                             <span className="text-muted-foreground">Last Paid</span>
