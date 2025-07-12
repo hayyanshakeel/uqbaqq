@@ -165,32 +165,45 @@ export async function getAllUsers(): Promise<User[]> {
     paymentsSnapshot.forEach(doc => {
         const payment = doc.data();
         const userId = payment.userId;
-        // Since payments are ordered by date descending, the first one we find for a user is the latest.
         if (userId && !lastPayments.has(userId) && payment.date) {
-            lastPayments.set(userId, format(payment.date.toDate(), 'dd/MM/yyyy'));
+            // FIX: Safely handle date conversion
+            const paymentDate = payment.date.toDate ? payment.date.toDate() : new Date(payment.date);
+            if (isValid(paymentDate)) {
+                lastPayments.set(userId, format(paymentDate, 'dd/MM/yyyy'));
+            }
         }
     });
 
     // Step 3: Map the user data and add the last payment date from our map.
     const users = usersSnapshot.docs.map(doc => {
         const data = doc.data();
-        const joinedDate = data.joined ? new Date(data.joined) : new Date();
+        
+        let joinedDateStr = 'N/A';
+        // FIX: Safely handle the 'joined' date, checking for its existence and validity.
+        if (data.joined) {
+            const dateObj = data.joined.toDate ? data.joined.toDate() : new Date(data.joined);
+            if (isValid(dateObj)) {
+                joinedDateStr = format(dateObj, 'dd/MM/yyyy');
+            }
+        }
 
         return {
             id: doc.id,
             name: data.name || 'N/A',
             phone: data.phone || 'N/A',
             status: data.status || 'pending',
-            joined: format(joinedDate, 'dd/MM/yyyy'),
+            joined: joinedDateStr,
             totalPaid: data.totalPaid || 0,
             pending: data.pending || 0,
             email: data.email || undefined,
-            lastPaidOn: lastPayments.get(doc.id) || 'N/A', // Get the date from the map
+            lastPaidOn: lastPayments.get(doc.id) || 'N/A',
         };
     });
 
     // Filter out the admin user from the final list.
-    return users.filter(user => user.email?.toLowerCase() !== ADMIN_EMAIL);
+    return users.filter(user => {
+        return typeof user.email !== 'string' || user.email.toLowerCase() !== ADMIN_EMAIL;
+    });
 }
 
 
