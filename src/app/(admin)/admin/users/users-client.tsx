@@ -54,6 +54,11 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
     
     const handleAction = (action: (...args: any[]) => Promise<{success: boolean, message: string}>, ...args: any[]) => {
         startTransition(async () => {
+            // FIX: Check if the action function exists before calling it
+            if (typeof action !== 'function') {
+                toast({ variant: 'destructive', title: 'Error', description: 'The requested action is not available.' });
+                return;
+            }
             const result = await action(...args);
             if (result.success) {
                 toast({ title: 'Success', description: result.message });
