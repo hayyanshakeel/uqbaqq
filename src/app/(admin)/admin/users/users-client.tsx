@@ -45,29 +45,29 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     useEffect(() => {
         setFilteredUsers(initialUsers);
     }, [initialUsers]);
-    
+
     const handleAction = (action: Function, ...args: any) => {
         startTransition(async () => {
             const result = await action(...args);
             if (result.success) {
                 toast({ title: 'Success', description: result.message });
-                router.refresh();
+                router.refresh(); 
+                closeAllDialogs();
             } else {
                 toast({ variant: 'destructive', title: 'Error', description: result.message });
             }
         });
     };
-
+    
     const handleFormAction = (e: React.FormEvent<HTMLFormElement>, action: Function, ...args: any) => {
         e.preventDefault();
         const formData = new FormData(e.currentTarget);
         handleAction(() => action(...args, formData));
-        closeAllDialogs();
     };
 
     const openDialog = (dialog: keyof typeof dialogs, user?: User) => {
         if (user) setSelectedUser(user);
-        setDialogs(prev => ({ ...prev, [dialog]: true }));
+        setDialogs(prev => ({...prev, [dialog]: true}));
     };
 
     const closeAllDialogs = () => {
@@ -117,9 +117,9 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                                 <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal /></Button></DropdownMenuTrigger>
                                                 <DropdownMenuContent align="end">
                                                     <DropdownMenuItem onSelect={() => openPayBillsDialog(user)}><CreditCard className="mr-2 h-4 w-4"/>Pay Bills</DropdownMenuItem>
+                                                    <DropdownMenuItem onSelect={() => openDialog('recalculate', user)}><RefreshCw className="mr-2 h-4 w-4"/>Bulk Record / Recalculate</DropdownMenuItem>
                                                     <DropdownMenuSeparator />
                                                     <DropdownMenuItem onSelect={() => openDialog('edit', user)}><Edit className="mr-2 h-4 w-4"/>Edit User</DropdownMenuItem>
-                                                    <DropdownMenuItem onSelect={() => openDialog('recalculate', user)}><RefreshCw className="mr-2 h-4 w-4"/>Recalculate Balance</DropdownMenuItem>
                                                     <DropdownMenuItem onSelect={() => handleAction(sendPaymentLinkAction, user.id)}><Send className="mr-2 h-4 w-4"/>Send Payment Link</DropdownMenuItem>
                                                     <DropdownMenuSeparator />
                                                     <DropdownMenuItem onSelect={() => confirmActionWrapper('Reverse Last Payment?', 'This action cannot be undone.', () => reverseLastPaymentAction(user.id))} className="text-amber-600 focus:text-amber-600"><Undo2 className="mr-2 h-4 w-4"/>Reverse Payment</DropdownMenuItem>
@@ -137,30 +137,33 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
             </main>
 
             {/* Dialogs */}
-            <Dialog open={dialogs.payBills} onOpenChange={(open) => setDialogs(p => ({...p, payBills: open}))}><DialogContent><DialogHeader><DialogTitle>Pay Bills for {selectedUser?.name}</DialogTitle></DialogHeader>
-                <div className="space-y-2 max-h-[60vh] overflow-y-auto p-4">
-                    {isLoading ? <Loader2 className="animate-spin mx-auto"/> :
-                        pendingBills.length > 0 ? pendingBills.map(bill => (
-                            <div key={bill.id} className="flex items-center justify-between border p-2 rounded-md">
-                                <span>{bill.notes} ({bill.date})</span>
-                                <div className="flex items-center gap-2">
-                                    <Badge variant="destructive">₹{bill.amount}</Badge>
-                                    <Button size="sm" onClick={() => handleAction(markBillAsPaidAction, selectedUser!.id, bill.id, bill.amount)} disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Mark Paid"}</Button>
+            <Dialog open={dialogs.payBills} onOpenChange={(open) => setDialogs(p => ({...p, payBills: open}))}>
+                <DialogContent>
+                    <DialogHeader><DialogTitle>Pay Bills for {selectedUser?.name}</DialogTitle></DialogHeader>
+                    <div className="space-y-2 max-h-[60vh] overflow-y-auto p-4">
+                        {isLoading ? <Loader2 className="animate-spin mx-auto"/> :
+                            pendingBills.length > 0 ? pendingBills.map(bill => (
+                                <div key={bill.id} className="flex items-center justify-between border p-2 rounded-md">
+                                    <span>{bill.notes} ({bill.date})</span>
+                                    <div className="flex items-center gap-2">
+                                        <Badge variant="destructive">₹{bill.amount}</Badge>
+                                        <Button size="sm" onClick={() => handleAction(markBillAsPaidAction, selectedUser!.id, bill.id, bill.amount)} disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Mark Paid"}</Button>
+                                    </div>
                                 </div>
-                            </div>
-                        )) : <p>No pending bills.</p>}
-                </div>
-            </DialogContent></Dialog>
-            <Dialog open={dialogs.add} onOpenChange={(open) => setDialogs(p => ({...p, add: open}))}><DialogContent><DialogHeader><DialogTitle>Add New User</DialogTitle></DialogHeader><form onSubmit={(e) => handleFormAction(e, addUserAction)}>{/* ... form fields ... */}<DialogFooter><Button type="submit" disabled={isPending}>Save</Button></DialogFooter></form></DialogContent></Dialog>
-            <Dialog open={dialogs.edit} onOpenChange={(open) => setDialogs(p => ({...p, edit: open}))}><DialogContent><DialogHeader><DialogTitle>Edit User</DialogTitle></DialogHeader><form onSubmit={(e) => handleFormAction(e, updateUserAction, selectedUser?.id)}>{/* ... form fields ... */}<DialogFooter><Button type="submit" disabled={isPending}>Save</Button></DialogFooter></form></DialogContent></Dialog>
-            <Dialog open={dialogs.recalculate} onOpenChange={(open) => setDialogs(p => ({...p, recalculate: open}))}><DialogContent><DialogHeader><DialogTitle>Recalculate Balance</DialogTitle></DialogHeader><form onSubmit={(e) => handleFormAction(e, recalculateBalanceUntilDateAction, selectedUser?.id)}>{/* ... form fields ... */}<DialogFooter><Button type="submit" disabled={isPending}>Recalculate</Button></DialogFooter></form></DialogContent></Dialog>
-            <Dialog open={dialogs.deceased} onOpenChange={(open) => setDialogs(p => ({...p, deceased: open}))}><DialogContent><DialogHeader><DialogTitle>Mark as Deceased</DialogTitle></DialogHeader><form onSubmit={(e) => handleFormAction(e, markAsDeceasedAction, selectedUser?.id)}>{/* ... form fields ... */}<DialogFooter><Button type="submit" disabled={isPending}>Confirm</Button></DialogFooter></form></DialogContent></Dialog>
+                            )) : <p>No pending bills.</p>}
+                    </div>
+                </DialogContent>
+            </Dialog>
+            <Dialog open={dialogs.add} onOpenChange={(open) => setDialogs(p => ({...p, add: open}))}><DialogContent><DialogHeader><DialogTitle>Add New User</DialogTitle></DialogHeader><form onSubmit={(e) => handleFormAction(e, addUserAction)}>{/* Add form fields here */}<DialogFooter><Button type="submit" disabled={isPending}>Save</Button></DialogFooter></form></DialogContent></Dialog>
+            <Dialog open={dialogs.edit} onOpenChange={(open) => setDialogs(p => ({...p, edit: open}))}><DialogContent><DialogHeader><DialogTitle>Edit User</DialogTitle></DialogHeader><form onSubmit={(e) => handleFormAction(e, updateUserAction, selectedUser?.id)}>{/* Add form fields here */}<DialogFooter><Button type="submit" disabled={isPending}>Save</Button></DialogFooter></form></DialogContent></Dialog>
+            <Dialog open={dialogs.recalculate} onOpenChange={(open) => setDialogs(p => ({...p, recalculate: open}))}><DialogContent><DialogHeader><DialogTitle>Recalculate Balance</DialogTitle><DialogDescription>Select the month up to which the user is fully paid. This will reset their history and recalculate everything.</DialogDescription></DialogHeader><form onSubmit={(e) => handleFormAction(e, recalculateBalanceUntilDateAction, selectedUser?.id)}><div className="grid gap-4 py-4"><Label htmlFor="untilMonth">Paid Until Month</Label><Input id="untilMonth" name="untilMonth" type="month" required /></div><DialogFooter><Button type="submit" disabled={isPending}>Recalculate</Button></DialogFooter></form></DialogContent></Dialog>
+            <Dialog open={dialogs.deceased} onOpenChange={(open) => setDialogs(p => ({...p, deceased: open}))}><DialogContent><DialogHeader><DialogTitle>Mark as Deceased</DialogTitle></DialogHeader><form onSubmit={(e) => handleFormAction(e, markAsDeceasedAction, selectedUser?.id)}><div className="grid gap-4 py-4"><Label htmlFor="dateOfDeath">Date of Death</Label><Input id="dateOfDeath" name="dateOfDeath" type="date" required /></div><DialogFooter><Button type="submit" variant="destructive" disabled={isPending}>Confirm</Button></DialogFooter></form></DialogContent></Dialog>
 
             <AlertDialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
-                <AlertDialogContent>
+                 <AlertDialogContent>
                     <AlertDialogHeader><AlertDialogTitle>{confirmAction?.title}</AlertDialogTitle><AlertDialogDescription>{confirmAction?.description}</AlertDialogDescription></AlertDialogHeader>
                     <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={confirmAction?.action} disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Continue"}</AlertDialogAction></AlertDialogFooter>
-                </AlertDialogContent>
+                 </AlertDialogContent>
             </AlertDialog>
         </>
     );
