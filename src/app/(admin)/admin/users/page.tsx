@@ -4,6 +4,7 @@ import { format, isValid, parseISO } from 'date-fns';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { UsersClient } from './users-client';
 import type { User } from '@/lib/data-service';
+// FIX: Importing all necessary actions to pass to the client component
 import {
     addUserAction,
     deleteUserAction,
@@ -12,7 +13,6 @@ import {
     sendPaymentLinkAction,
     reverseLastPaymentAction,
     recalculateBalanceUntilDateAction,
-    addSinglePaymentAction,
     addMissedBillAction,
     getPendingBillsForUserAction,
     markBillAsPaidAction
@@ -30,7 +30,6 @@ async function getUsers(): Promise<User[]> {
     const usersData = await Promise.all(usersSnapshot.docs.map(async (doc) => {
         const data = doc.data();
         
-        // Fetch the most recent payment for the user
         const paymentsSnapshot = await adminDb.collection('payments')
             .where('userId', '==', doc.id)
             .orderBy('date', 'desc')
@@ -40,7 +39,6 @@ async function getUsers(): Promise<User[]> {
         let lastPaidOn = 'N/A';
         if (!paymentsSnapshot.empty) {
             const payment = paymentsSnapshot.docs[0].data();
-            // Handle both Firestore Timestamps and string dates
             const paymentDate = payment.date?.toDate ? payment.date.toDate() : new Date(payment.date);
             if (isValid(paymentDate)) {
                 lastPaidOn = format(paymentDate, 'dd/MM/yyyy');
@@ -80,6 +78,7 @@ async function getUsers(): Promise<User[]> {
 export default async function UsersPage() {
     const users = await getUsers();
 
+    // FIX: Passing all the required actions as props to the client component
     return (
         <UsersClient
             initialUsers={users}
@@ -90,7 +89,6 @@ export default async function UsersPage() {
             sendPaymentLinkAction={sendPaymentLinkAction}
             reverseLastPaymentAction={reverseLastPaymentAction}
             recalculateBalanceUntilDateAction={recalculateBalanceUntilDateAction}
-            addSinglePaymentAction={addSinglePaymentAction}
             addMissedBillAction={addMissedBillAction}
             getPendingBillsForUserAction={getPendingBillsForUserAction}
             markBillAsPaidAction={markBillAsPaidAction}
