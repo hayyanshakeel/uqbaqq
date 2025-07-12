@@ -1,801 +1,684 @@
-'use client';
+'use server';
 
-import { useState, useTransition, useRef, useEffect } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, HeartCrack, Send, SplitSquareHorizontal, RefreshCw } from "lucide-react";
-import { Badge } from '@/components/ui/badge';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { useToast } from '@/hooks/use-toast';
-import type { User, Bill } from '@/lib/data-service';
-import { 
-    addUserAction, 
-    deleteUserAction, 
-    recordPaymentAction, 
-    addMissedBillAction, 
-    reverseLastPaymentAction, 
-    reverseLastBillAction, 
-    updateUserAction, 
-    recalculateBalanceUntilDateAction, 
-    markAsDeceasedAction, 
-    sendPaymentLinkAction,
-    getPendingMonthsForUser,
-    splitMissedBillAction,
-    getPendingBillsForUserAction,
-    markBillAsPaidAction
-} from './actions';
-import { Textarea } from '@/components/ui/textarea';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
+import { revalidatePath } from 'next/cache';
+import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid, format, isAfter } from 'date-fns';
+import { getBillingSettings } from '@/app/(admin)/admin/settings/actions';
+import { createPaymentLink } from '@/app/(user)/dashboard/actions';
+import * as admin from 'firebase-admin';
+import { Bill } from '@/lib/data-service';
 
-type UsersClientProps = {
-    users: User[];
-};
+// --- Fee Structure Definition ---
+const feeStructure = [
+    { start: '2001-05-01', end: '2007-04-30', fee: 30 },
+    { start: '2007-05-01', end: '2014-04-30', fee: 50 },
+    { start: '2014-05-01', end: '2019-06-30', fee: 100 },
+    { start: '2019-07-01', end: '2024-03-31', fee: 200 },
+    { start: '2024-04-01', end: '9999-12-31', fee: 250 }
+];
 
-export default function UsersClient({ users: initialUsers }: UsersClientProps) {
-    const [filteredUsers, setFilteredUsers] = useState(initialUsers);
-    const [isAddUserOpen, setIsAddUserOpen] = useState(false);
-    const [isEditUserOpen, setIsEditUserOpen] = useState(false);
-    const [selectedUser, setSelectedUser] = useState<User | null>(null);
-    const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
-    const [isRecalculateOpen, setIsRecalculateOpen] = useState(false);
-    const [isAddMissedBillOpen, setIsAddMissedBillOpen] = useState(false);
-    const [isSplitBillOpen, setIsSplitBillOpen] = useState(false);
-    const [isMarkAsDeceasedOpen, setIsMarkAsDeceasedOpen] = useState(false);
-    const [isPayBillsOpen, setIsPayBillsOpen] = useState(false);
-    const [pendingBills, setPendingBills] = useState<Bill[]>([]);
-    const [isConfirmOpen, setIsConfirmOpen] = useState(false);
-    const [confirmAction, setConfirmAction] = useState<{ action: () => void, title: string, description: string } | null>(null);
-    const [isExporting, setIsExporting] = useState(false);
-    const [payingBillId, setPayingBillId] = useState<string | null>(null);
+// --- Helper function to calculate dues for a given period ---
+function calculateDuesForPeriod(startDateStr: string, endDateStr: string): { totalDues: number; monthlyBreakdown: { month: Date, fee: number }[] } {
+    const startDate = startOfMonth(parse(startDateStr, 'yyyy-MM-dd', new Date()));
+    const endDate = startOfMonth(parse(endDateStr, 'yyyy-MM-dd', new Date()));
+    let totalDues = 0;
+    const monthlyBreakdown: { month: Date, fee: number }[] = [];
 
-    const { toast } = useToast();
-    const [isPending, startTransition] = useTransition();
 
-    const addUserFormRef = useRef<HTMLFormElement>(null);
-    const editUserFormRef = useRef<HTMLFormElement>(null);
-    const recordPaymentFormRef = useRef<HTMLFormElement>(null);
-    const recalculateFormRef = useRef<HTMLFormElement>(null);
-    const addMissedBillFormRef = useRef<HTMLFormElement>(null);
-    const splitBillFormRef = useRef<HTMLFormElement>(null);
-    const deceasedFormRef = useRef<HTMLFormElement>(null);
-
-    const handleSplitBill = async (formData: FormData) => {
-        startTransition(async () => {
-            const result = await splitMissedBillAction(formData);
-            if (result.success) {
-                toast({ title: "Success", description: result.message });
-                setIsSplitBillOpen(false);
-                splitBillFormRef.current?.reset();
-            } else {
-                toast({ variant: "destructive", title: "Error", description: result.message });
-            }
-        });
-    };
-
-    const handleAddUser = async (formData: FormData) => {
-        startTransition(async () => {
-            const result = await addUserAction(formData);
-            if (result.success) {
-                toast({ title: "User Added", description: result.message });
-                setIsAddUserOpen(false);
-                addUserFormRef.current?.reset();
-            } else {
-                toast({ variant: "destructive", title: "Error", description: result.message });
-            }
-        });
+    if (!isValid(startDate) || !isValid(endDate)) {
+        throw new Error(`Invalid date format encountered. Start: "${startDateStr}", End: "${endDateStr}"`);
     }
 
-    const handleUpdateUser = async (formData: FormData) => {
-        if (!selectedUser) return;
-        startTransition(async () => {
-            const result = await updateUserAction(selectedUser.id, formData);
-            if (result.success) {
-                toast({ title: "User Updated", description: result.message });
-                setIsEditUserOpen(false);
-            } else {
-                toast({ variant: "destructive", title: "Error", description: result.message });
-            }
-        });
-    };
-
-    const handleRecalculateBalance = async (formData: FormData) => {
-        if (!selectedUser) return;
-        setConfirmAction({
-            title: `Recalculate Balance for ${selectedUser.name}?`,
-            description: "This will ERASE all previous payment and bill history for this user and create a new consolidated payment record. It will then generate new bills for any outstanding months. This action is irreversible.",
-            action: () => startTransition(async () => {
-                const result = await recalculateBalanceUntilDateAction(selectedUser.id, formData);
-                if (result.success) {
-                    toast({ title: "Balance Recalculated", description: result.message });
-                    setIsRecalculateOpen(false);
-                } else {
-                    toast({ variant: "destructive", title: "Error", description: result.message });
-                }
-            })
-        });
-        setIsConfirmOpen(true);
-    };
-
-    const handleMarkAsDeceased = async (formData: FormData) => {
-        if (!selectedUser) return;
-        startTransition(async () => {
-            const result = await markAsDeceasedAction(selectedUser.id, formData);
-            if (result.success) {
-                toast({ title: "User Status Updated", description: result.message });
-                setIsMarkAsDeceasedOpen(false);
-            } else {
-                toast({ variant: "destructive", title: "Error", description: result.message });
-            }
-        });
-    };
-
-    const confirmDeleteUser = (user: User) => {
-        setConfirmAction({
-            title: `Delete ${user.name}?`,
-            description: "This will permanently delete the user's account and all associated data from authentication and the database. This action cannot be undone.",
-            action: () => startTransition(async () => {
-                const result = await deleteUserAction(user.id);
-                if (result.success) {
-                    toast({ title: "User Deleted", description: result.message });
-                } else {
-                    toast({ variant: "destructive", title: "Error", description: result.message });
-                }
-            })
-        });
-        setIsConfirmOpen(true);
-    };
-
-    const handleRecordPayment = async (formData: FormData) => {
-        startTransition(async () => {
-            const result = await recordPaymentAction(formData);
-            if (result.success) {
-                toast({ title: "Payment Recorded", description: result.message });
-                setIsRecordPaymentOpen(false);
-                recordPaymentFormRef.current?.reset();
-            } else {
-                toast({ variant: "destructive", title: "Error", description: result.message });
-            }
-        });
-    };
-
-    const handleMarkBillAsPaid = (billId: string, billAmount: number) => {
-        if (!selectedUser) return;
-        setPayingBillId(billId); // Set loading state for this specific bill
-        startTransition(async () => {
-            const result = await markBillAsPaidAction(selectedUser.id, billId, billAmount);
-             if (result.success) {
-                toast({ title: "Success", description: result.message });
-                // Refresh the list of pending bills
-                const updatedBills = await getPendingBillsForUserAction(selectedUser.id);
-                setPendingBills(updatedBills);
-                if (updatedBills.length === 0) {
-                    setIsPayBillsOpen(false);
-                }
-            } else {
-                toast({ variant: "destructive", title: "Error", description: result.message });
-            }
-            setPayingBillId(null);
-        });
-    };
-
-    const handleAddMissedBill = async (formData: FormData) => {
-        startTransition(async () => {
-            const result = await addMissedBillAction(formData);
-            if (result.success) {
-                toast({ title: "Bill Added", description: result.message });
-                setIsAddMissedBillOpen(false);
-                addMissedBillFormRef.current?.reset();
-            } else {
-                toast({ variant: "destructive", title: "Error", description: result.message });
-            }
-        });
-    };
+    if (startDate > endDate) return { totalDues: 0, monthlyBreakdown: [] };
     
-    const handleReversePayment = (userId: string) => {
-        setConfirmAction({
-            title: 'Reverse Last Payment?',
-            description: 'This will find the most recent payment record, delete it, and update the user\'s balance. This action cannot be undone.',
-            action: () => startTransition(async () => {
-                const result = await reverseLastPaymentAction(userId);
-                if (result.success) {
-                    toast({ title: "Action Successful", description: result.message });
-                } else {
-                    toast({ variant: "destructive", title: "Error", description: result.message });
-                }
-            })
-        });
-        setIsConfirmOpen(true);
-    };
-    
-    const handleReverseBill = (userId: string) => {
-        setConfirmAction({
-            title: 'Reverse Last Added Bill?',
-            description: 'This will find the most recent bill record, delete it, and update the user\'s balance. This action cannot be undone.',
-            action: () => startTransition(async () => {
-                const result = await reverseLastBillAction(userId);
-                if (result.success) {
-                    toast({ title: "Action Successful", description: result.message });
-                } else {
-                    toast({ variant: "destructive", title: "Error", description: result.message });
-                }
-            })
-        });
-        setIsConfirmOpen(true);
-    };
+    const totalMonths = differenceInMonths(endDate, startDate) + 1;
 
-    const handleSendPaymentLink = (userId: string) => {
-        startTransition(async () => {
-            const result = await sendPaymentLinkAction(userId);
-            if (result.success) {
-                toast({ title: "Action Successful", description: result.message });
-            } else {
-                toast({ variant: "destructive", title: "Error", description: result.message });
-            }
-        });
-    };
-
-    const handleSearch = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const searchTerm = event.target.value.toLowerCase();
-        const newFilteredUsers = initialUsers.filter(user => 
-            user.name.toLowerCase().includes(searchTerm) ||
-            (user.phone && user.phone.toLowerCase().includes(searchTerm)) ||
-            (user.email && user.email.toLowerCase().includes(searchTerm))
-        );
-        setFilteredUsers(newFilteredUsers);
-    };
-
-    const handleExportData = async () => {
-        setIsExporting(true);
-        const headers = ['name', 'email', 'phone', 'status', 'joined', 'lastPaidOn', 'totalPaid', 'pending', 'pendingMonths'];
-        const csvRows = [headers.join(",")];
+    for (let i = 0; i < totalMonths; i++) {
+        const monthDate = addMonths(startDate, i);
         
-        for (const user of filteredUsers) {
-            const pendingMonths = await getPendingMonthsForUser(user.id);
-            const row = [
-                `"${user.name.replace(/"/g, '""')}"`,
-                user.email || '',
-                user.phone || '',
-                user.status,
-                user.joined,
-                user.lastPaidOn || 'N/A',
-                user.totalPaid.toFixed(2),
-                user.pending.toFixed(2),
-                `"${pendingMonths}"`
-            ].join(",");
-            csvRows.push(row);
+        const applicableTier = feeStructure.find(tier => {
+            const tierStart = parse(tier.start, 'yyyy-MM-dd', new Date());
+            const tierEnd = parse(tier.end, 'yyyy-MM-dd', new Date());
+            return monthDate >= tierStart && monthDate <= tierEnd;
+        });
+
+        if (applicableTier) {
+            totalDues += applicableTier.fee;
+            monthlyBreakdown.push({ month: monthDate, fee: applicableTier.fee });
+        }
+    }
+    return { totalDues, monthlyBreakdown };
+}
+
+// ACTION: Fetch pending bills for the admin modal
+export async function getPendingBillsForUserAction(userId: string): Promise<Bill[]> {
+    if (!userId) return [];
+    const adminDb = getAdminDb();
+    const billsSnapshot = await adminDb.collection('bills')
+        .where('userId', '==', userId)
+        .where('status', '==', 'pending')
+        .orderBy('dueDate', 'asc')
+        .get();
+
+    if (billsSnapshot.empty) {
+        return [];
+    }
+
+    return billsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+            id: doc.id,
+            amount: data.amount,
+            date: format(data.dueDate.toDate(), 'dd/MM/yyyy'),
+            notes: data.notes,
+        };
+    });
+}
+
+// ACTION: Mark a specific bill as paid
+export async function markBillAsPaidAction(userId: string, billId: string, billAmount: number) {
+    if (!userId || !billId || !billAmount) {
+        return { success: false, message: 'User ID, Bill ID, and amount are required.' };
+    }
+
+    const adminDb = getAdminDb();
+    const userRef = adminDb.collection('users').doc(userId);
+    const billRef = adminDb.collection('bills').doc(billId);
+
+    try {
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error('User not found');
+            
+            const billDoc = await transaction.get(billRef);
+            if (!billDoc.exists) throw new Error('Bill not found');
+
+            const userData = userDoc.data()!;
+            const newTotalPaid = (userData.totalPaid || 0) + billAmount;
+            const newPending = (userData.pending || 0) - billAmount;
+
+            // Update user's main balance
+            transaction.update(userRef, {
+                totalPaid: newTotalPaid,
+                pending: newPending < 0 ? 0 : newPending,
+                status: newPending <= 0 ? 'paid' : 'pending'
+            });
+
+            // Mark the specific bill as paid
+            transaction.update(billRef, { status: 'paid' });
+
+            // Create a corresponding payment record
+            const paymentRef = adminDb.collection('payments').doc();
+            transaction.set(paymentRef, {
+                userId,
+                amount: billAmount,
+                date: new Date(),
+                notes: `Manual payment for bill: ${billDoc.data()?.notes || billId}`,
+                type: 'manual_bill_payment',
+                createdAt: new Date()
+            });
+        });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+        revalidatePath(`/dashboard`); // Revalidate user's dashboard
+        return { success: true, message: 'Bill marked as paid successfully!' };
+    } catch (error: any) {
+        console.error("Error marking bill as paid:", error);
+        return { success: false, message: error.message || 'Failed to mark bill as paid.' };
+    }
+}
+
+
+export async function sendPaymentLinkAction(userId: string) {
+    if (!userId) {
+        return { success: false, message: 'User ID is required.' };
+    }
+
+    const settings = await getBillingSettings();
+    if (!settings.manualBulkPayment) {
+        return { success: false, message: 'This feature is disabled in the settings.' };
+    }
+
+    try {
+        const result = await createPaymentLink(userId);
+        if (result.success) {
+            return { success: true, message: `Payment link sent successfully.` };
+        } else {
+            return { success: false, message: result.message || 'Failed to send payment link.' };
+        }
+    } catch (error: any) {
+        console.error("Error sending payment link:", error);
+        return { success: false, message: error.message };
+    }
+}
+export async function markAsDeceasedAction(userId: string, formData: FormData) {
+    const dateOfDeathStr = formData.get('dateOfDeath') as string;
+
+    if (!userId || !dateOfDeathStr) {
+        return { success: false, message: 'User ID and Date of Death are required.' };
+    }
+
+    try {
+        const adminDb = getAdminDb();
+        const adminAuth = getAdminAuth();
+        const userRef = adminDb.collection('users').doc(userId);
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) {
+            throw new Error("User not found.");
+        }
+        
+        const userData = userDoc.data()!;
+        const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
+        
+        const { totalDues } = calculateDuesForPeriod(joiningDate, dateOfDeathStr);
+        const finalPending = totalDues - (userData.totalPaid || 0);
+
+        await userRef.update({
+            status: 'deceased',
+            pending: finalPending < 0 ? 0 : finalPending, 
+            dateOfDeath: new Date(dateOfDeathStr)
+        });
+
+        await adminAuth.updateUser(userId, { disabled: true });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+
+        return { success: true, message: 'User has been marked as deceased. Their account is now inactive and balance finalized.' };
+    } catch (error: any) {
+        console.error("Error marking user as deceased:", error);
+        return { success: false, message: error.message };
+    }
+}
+
+export async function recalculateBalanceUntilDateAction(userId: string, formData: FormData) {
+    const untilMonthStr = formData.get('untilMonth') as string; // Expects "YYYY-MM" format
+
+    if (!userId || !untilMonthStr) {
+        return { success: false, message: 'User ID and "Paid Until" month are required.' };
+    }
+    try {
+        const adminDb = getAdminDb();
+        const userRef = adminDb.collection('users').doc(userId);
+
+        const untilDate = lastDayOfMonth(new Date(`${untilMonthStr}-01T12:00:00Z`));
+        const today = new Date();
+
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error('User not found!');
+            const userData = userDoc.data()!;
+            const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
+
+            // 1. Clear existing bills and payments for this user
+            const billsQuery = adminDb.collection('bills').where('userId', '==', userId);
+            const paymentsQuery = adminDb.collection('payments').where('userId', '==', userId);
+            const [billsSnapshot, paymentsSnapshot] = await Promise.all([transaction.get(billsQuery), transaction.get(paymentsQuery)]);
+            
+            billsSnapshot.forEach(doc => transaction.delete(doc.ref));
+            paymentsSnapshot.forEach(doc => transaction.delete(doc.ref));
+
+            // 2. Calculate paid amount and create a single consolidated payment
+            const { totalDues: paidAmount } = calculateDuesForPeriod(joiningDate, format(untilDate, 'yyyy-MM-dd'));
+            if (paidAmount > 0) {
+                const paymentRef = adminDb.collection('payments').doc();
+                transaction.set(paymentRef, {
+                    userId,
+                    amount: paidAmount,
+                    date: untilDate,
+                    notes: `Bulk historic payment record until ${format(untilDate, 'MMM yyyy')}.`,
+                    type: 'manual_recalculation',
+                    createdAt: new Date()
+                });
+            }
+
+            // 3. Calculate new pending balance and generate new pending bills
+            let newPending = 0;
+            const pendingPeriodStart = startOfMonth(addMonths(untilDate, 1));
+
+            if (isAfter(today, pendingPeriodStart)) {
+                const { totalDues: pendingAmount, monthlyBreakdown: pendingBills } = calculateDuesForPeriod(
+                    format(pendingPeriodStart, 'yyyy-MM-dd'),
+                    format(today, 'yyyy-MM-dd')
+                );
+                newPending = pendingAmount;
+
+                // Create new bill documents for the pending period
+                pendingBills.forEach(bill => {
+                    const billRef = adminDb.collection('bills').doc();
+                    transaction.set(billRef, {
+                        userId,
+                        amount: bill.fee,
+                        dueDate: bill.month,
+                        notes: `Bill for ${format(bill.month, 'MMMM yyyy')}`,
+                        status: 'pending',
+                        createdAt: new Date()
+                    });
+                });
+            }
+
+            // 4. Update user document
+            transaction.update(userRef, {
+                totalPaid: paidAmount,
+                pending: newPending,
+                status: newPending <= 0 ? 'paid' : 'pending'
+            });
+        });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+        revalidatePath('/dashboard');
+
+        return { success: true, message: `Balance recalculated successfully. User is now marked as paid until ${untilMonthStr}.` };
+
+    } catch (error: any) {
+        console.error("Error in recalculate balance action:", error);
+        return { success: false, message: error.message || 'An unexpected error occurred.' };
+    }
+}
+
+
+export async function updateUserAction(userId: string, formData: FormData) {
+    const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
+
+    const name = formData.get('name') as string;
+    const email = formData.get('email') as string;
+    const phone = formData.get('phone') as string;
+    const password = formData.get('password') as string;
+
+    if (!name || !email || !phone) {
+        return { success: false, message: 'Name, email, and phone are required.' };
+    }
+
+    try {
+        const firestoreUpdatePayload = { name, email, phone };
+        
+        const formattedPhone = phone.startsWith('+') ? phone : `+91${phone}`;
+
+        const authUpdatePayload: { displayName: string; email: string; phoneNumber: string; password?: string } = { 
+            displayName: name, 
+            email, 
+            phoneNumber: formattedPhone
+        };
+        
+        if (password) {
+            if (password.length < 6) {
+                return { success: false, message: 'New password must be at least 6 characters long.' };
+            }
+            authUpdatePayload.password = password;
         }
 
-        const csvContent = "data:text/csv;charset=utf-8," + encodeURIComponent(csvRows.join("\n"));
-        const link = document.createElement("a");
-        link.setAttribute("href", csvContent);
-        link.setAttribute("download", "uqba-users-export.csv");
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        setIsExporting(false);
-    };
+        await adminAuth.updateUser(userId, authUpdatePayload);
+        await adminDb.collection('users').doc(userId).update(firestoreUpdatePayload);
 
+        revalidatePath('/admin/users');
+        return { success: true, message: 'User details updated successfully.' };
+    } catch (error: any) {
+        console.error("Error updating user:", error);
+        return { success: false, message: error.message || 'Failed to update user details.' };
+    }
+}
 
-    useEffect(() => {
-        setFilteredUsers(initialUsers);
-    }, [initialUsers]);
+export async function addUserAction(formData: FormData) {
+    const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
+    const name = formData.get('name') as string;
+    const phone = formData.get('phone') as string;
+    const email = formData.get('email') as string;
+    const password = formData.get('password') as string;
+    const joiningDateStr = formData.get('joining_date') as string;
 
-    const openEditUserDialog = (user: User) => {
-        setSelectedUser(user);
-        setIsEditUserOpen(true);
-    };
+    if (!name || !phone || !email || !password || !joiningDateStr) {
+        return { success: false, message: 'All fields are required.' };
+    }
 
-    const openPayBillsDialog = async (user: User) => {
-        setSelectedUser(user);
-        setIsPending(true);
-        const bills = await getPendingBillsForUserAction(user.id);
-        setPendingBills(bills);
-        setIsPending(false);
-        setIsPayBillsOpen(true);
-    };
+    if (password.length < 6) {
+        return { success: false, message: 'Password must be at least 6 characters long.' };
+    }
 
-    const openRecordPaymentDialog = (user: User) => {
-        setSelectedUser(user);
-        setIsRecordPaymentOpen(true);
-    };
+    try {
+        const userRecord = await adminAuth.createUser({
+            email,
+            password,
+            displayName: name,
+        });
+        
+        const todayStr = new Date().toISOString().split('T')[0];
+        const { totalDues, monthlyBreakdown } = calculateDuesForPeriod(joiningDateStr, todayStr);
 
-    const openRecalculateDialog = (user: User) => {
-        setSelectedUser(user);
-        setIsRecalculateOpen(true);
-    };
+        const batch = adminDb.batch();
 
-    const openAddMissedBillDialog = (user: User) => {
-        setSelectedUser(user);
-        setIsAddMissedBillOpen(true);
-    };
-    
-    const openSplitBillDialog = (user: User) => {
-        setSelectedUser(user);
-        setIsSplitBillOpen(true);
-    };
+        const userRef = adminDb.collection('users').doc(userRecord.uid);
+        batch.set(userRef, {
+            name,
+            phone,
+            email,
+            status: totalDues > 0 ? 'pending' : 'paid',
+            joined: new Date(joiningDateStr).toISOString(),
+            totalPaid: 0,
+            pending: totalDues,
+        });
+        
+        // Create individual bill documents for each pending month
+        monthlyBreakdown.forEach(bill => {
+            const billRef = adminDb.collection('bills').doc();
+            batch.set(billRef, {
+                userId: userRecord.uid,
+                amount: bill.fee,
+                dueDate: bill.month,
+                notes: `Automatic bill for ${format(bill.month, 'MMMM yyyy')}`,
+                status: 'pending',
+                createdAt: new Date()
+            });
+        });
 
-    const openMarkAsDeceasedDialog = (user: User) => {
-        setSelectedUser(user);
-        setIsMarkAsDeceasedOpen(true);
-    };
+        await batch.commit();
+        
+        revalidatePath('/admin/users');
+        return { success: true, message: `${name} has been successfully added with ${monthlyBreakdown.length} pending bills.` };
+    } catch (error: any) {
+        console.error('Error adding user:', error);
+        let message = 'Failed to add user.';
+        if (error.code === 'auth/email-already-exists') {
+            message = 'This email address is already in use by another account.';
+        } else if (error.code === 'auth/invalid-password') {
+            message = 'The password is not strong enough.';
+        }
+        return { success: false, message };
+    }
+}
 
-    const UserActionsDropdown = ({ user }: { user: User }) => (
-        <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="h-8 w-8 p-0" disabled={isPending}>
-                    <span className="sr-only">Open menu</span>
-                    <MoreHorizontal className="h-4 w-4" />
-                </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => openPayBillsDialog(user)}>
-                    <CreditCard className="mr-2 h-4 w-4" />
-                    <span>Pay Pending Bills</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openRecordPaymentDialog(user)}>
-                    <CreditCard className="mr-2 h-4 w-4" />
-                    <span>Record Single Payment</span>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => handleSendPaymentLink(user.id)}>
-                    <Send className="mr-2 h-4 w-4" />
-                    <span>Send Payment Link</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openRecalculateDialog(user)}>
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    <span>Recalculate Balance</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openEditUserDialog(user)}>
-                    <Edit className="mr-2 h-4 w-4" />
-                    <span>Edit User</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openAddMissedBillDialog(user)}>
-                    <CalendarPlus className="mr-2 h-4 w-4" />
-                    <span>Add Single Missed Bill</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openSplitBillDialog(user)}>
-                    <SplitSquareHorizontal className="mr-2 h-4 w-4" />
-                    <span>Add & Split Bill</span>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => handleReversePayment(user.id)} className="text-destructive focus:text-destructive">
-                    <Undo2 className="mr-2 h-4 w-4" />
-                    <span>Reverse Last Payment</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => handleReverseBill(user.id)} className="text-destructive focus:text-destructive">
-                    <Undo2 className="mr-2 h-4 w-4" />
-                    <span>Reverse Last Bill</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openMarkAsDeceasedDialog(user)} className="text-destructive focus:text-destructive">
-                    <HeartCrack className="mr-2 h-4 w-4" />
-                    <span>Mark as Deceased</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => confirmDeleteUser(user)} className="text-destructive focus:text-destructive">
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    <span>Delete User</span>
-                </DropdownMenuItem>
-            </DropdownMenuContent>
-        </DropdownMenu>
-    );
+export async function deleteUserAction(userId: string) {
+    const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
+    if (!userId) {
+        return { success: false, message: 'User ID is required.' };
+    }
 
-    return (
-        <>
-            <main className="flex-1 space-y-4 p-4 md:p-8 pt-6">
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                    <div>
-                        <h2 className="text-3xl font-bold font-headline tracking-tight">User Management</h2>
-                        <p className="text-muted-foreground">Manage all committee members and their payment records.</p>
-                    </div>
-                    <div className="flex items-center space-x-2 flex-wrap gap-2">
-                        <Button variant="outline" onClick={handleExportData} disabled={isExporting}>
-                            {isExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-                             Export Data
-                        </Button>
-                        <Dialog open={isAddUserOpen} onOpenChange={setIsAddUserOpen}>
-                            <DialogTrigger asChild>
-                                <Button><PlusCircle className="mr-2 h-4 w-4" /> Add User</Button>
-                            </DialogTrigger>
-                            <DialogContent>
-                                <DialogHeader>
-                                    <DialogTitle>Add New User</DialogTitle>
-                                    <DialogDescription>
-                                        This will create a new user account and add them to the member list.
-                                    </DialogDescription>
-                                </DialogHeader>
-                                <form ref={addUserFormRef} action={handleAddUser}>
-                                    <div className="grid gap-4 py-4">
-                                        <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="add-name" className="text-right">Name</Label>
-                                            <Input id="add-name" name="name" className="col-span-3" placeholder="Full Name" required />
-                                        </div>
-                                        <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="add-phone" className="text-right">Phone</Label>
-                                            <Input id="add-phone" name="phone" className="col-span-3" placeholder="Phone Number" required />
-                                        </div>
-                                        <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="add-email" className="text-right">Email</Label>
-                                            <Input id="add-email" name="email" type="email" className="col-span-3" placeholder="user@example.com" required />
-                                        </div>
-                                        <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="add-password" className="text-right">Password</Label>
-                                            <Input id="add-password" name="password" type="password" className="col-span-3" placeholder="********" required />
-                                        </div>
-                                        <div className="grid grid-cols-4 items-center gap-4">
-                                            <Label htmlFor="add-joining_date" className="text-right">Joining Date</Label>
-                                            <Input id="add-joining_date" name="joining_date" type="date" className="col-span-3" required />
-                                        </div>
-                                    </div>
-                                    <DialogFooter>
-                                        <Button type="submit" disabled={isPending}>
-                                            {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                            Add User
-                                        </Button>
-                                    </DialogFooter>
-                                </form>
-                            </DialogContent>
-                        </Dialog>
-                    </div>
-                </div>
+    try {
+        // Also delete bills and payments associated with the user
+        const batch = adminDb.batch();
+        const billsQuery = adminDb.collection('bills').where('userId', '==', userId);
+        const paymentsQuery = adminDb.collection('payments').where('userId', '==', userId);
+        
+        const [billsSnapshot, paymentsSnapshot] = await Promise.all([billsQuery.get(), paymentsQuery.get()]);
+        
+        billsSnapshot.forEach(doc => batch.delete(doc.ref));
+        paymentsSnapshot.forEach(doc => batch.delete(doc.ref));
+        
+        const userRef = adminDb.collection('users').doc(userId);
+        batch.delete(userRef);
+        
+        await batch.commit();
+        await adminAuth.deleteUser(userId);
+        
+        revalidatePath('/admin/users');
+        return { success: true, message: 'User deleted successfully from Auth and Firestore.' };
+    } catch (error: any) {
+        console.error('Error deleting user:', error);
+        if (error.code === 'auth/user-not-found') {
+            revalidatePath('/admin/users');
+            return { success: true, message: 'User was already deleted from Auth, removed from list.'};
+        }
+        return { success: false, message: 'Failed to delete user.' };
+    }
+}
 
-                <Card>
-                    <CardHeader>
-                        <div className="flex items-center gap-4">
-                            <div className="relative flex-1">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                <Input placeholder="Search users by name, email or phone..." className="pl-10" onChange={handleSearch} />
-                            </div>
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="hidden md:block">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Name</TableHead>
-                                        <TableHead>Status</TableHead>
-                                        <TableHead>Joined</TableHead>
-                                        <TableHead>Last Paid</TableHead>
-                                        <TableHead className="text-right">Total Paid</TableHead>
-                                        <TableHead className="text-right">Pending</TableHead>
-                                        <TableHead className="text-right">Actions</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {filteredUsers.map((user) => (
-                                        <TableRow key={user.id}>
-                                            <TableCell className="font-medium">{user.name}<br/><span className="text-xs text-muted-foreground">{user.email}</span></TableCell>
-                                            <TableCell>
-                                                <Badge variant={user.status === 'paid' ? 'default' : user.status === 'deceased' ? 'destructive' : 'secondary'}>
-                                                    {user.status}
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell>{user.joined}</TableCell>
-                                            <TableCell>{user.lastPaidOn}</TableCell>
-                                            <TableCell className="text-right">₹{user.totalPaid.toFixed(2)}</TableCell>
-                                            <TableCell className="text-right text-destructive font-semibold">₹{user.pending.toFixed(2)}</TableCell>
-                                            <TableCell className="text-right">
-                                                <UserActionsDropdown user={user} />
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                    {filteredUsers.length === 0 && (
-                                        <TableRow>
-                                            <TableCell colSpan={8} className="h-24 text-center">No users found.</TableCell>
-                                        </TableRow>
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </div>
-                        <div className="space-y-4 md:hidden">
-                             {filteredUsers.map((user) => (
-                                <Card key={user.id}>
-                                    <CardHeader className="p-4 flex flex-row items-start justify-between space-x-4">
-                                        <div>
-                                            <CardTitle className="text-base">{user.name}</CardTitle>
-                                            <CardDescription className="text-xs break-all">{user.email}</CardDescription>
-                                        </div>
-                                        <div className="flex-shrink-0">
-                                           <UserActionsDropdown user={user} />
-                                        </div>
-                                    </CardHeader>
-                                    <CardContent className="p-4 pt-0 space-y-2">
-                                        <div className="flex justify-between items-center text-sm">
-                                            <span className="text-muted-foreground">Status</span>
-                                            <Badge variant={user.status === 'paid' ? 'default' : user.status === 'deceased' ? 'destructive' : 'secondary'}>
-                                                {user.status}
-                                            </Badge>
-                                        </div>
-                                        <div className="flex justify-between items-center text-sm">
-                                            <span className="text-muted-foreground">Joined</span>
-                                            <span>{user.joined}</span>
-                                        </div>
-                                        <div className="flex justify-between items-center text-sm">
-                                            <span className="text-muted-foreground">Last Paid</span>
-                                            <span>{user.lastPaidOn}</span>
-                                        </div>
-                                         <div className="flex justify-between items-center text-sm">
-                                            <span className="text-muted-foreground">Total Paid</span>
-                                            <span className="font-medium">₹{user.totalPaid.toFixed(2)}</span>
-                                        </div>
-                                        <div className="flex justify-between items-center text-sm">
-                                            <span className="text-muted-foreground">Pending</span>
-                                            <span className="font-semibold text-destructive">₹{user.pending.toFixed(2)}</span>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-                            ))}
-                            {filteredUsers.length === 0 && (
-                                <div className="h-24 text-center flex items-center justify-center">
-                                    <p>No users found.</p>
-                                </div>
-                            )}
-                        </div>
-                    </CardContent>
-                </Card>
-            </main>
+export async function addMissedBillAction(formData: FormData) {
+    const adminDb = getAdminDb();
+    const userId = formData.get('userId') as string;
+    const amountStr = formData.get('amount') as string;
+    const billingMonth = formData.get('billingMonth') as string;
+    const notes = formData.get('notes') as string | null;
+
+    const amount = parseFloat(amountStr);
+
+    if (!userId || !amountStr || !billingMonth || isNaN(amount) || amount <= 0) {
+        return { success: false, message: 'Please provide a valid user, amount, and billing month.' };
+    }
+
+    try {
+        const userRef = adminDb.collection('users').doc(userId);
+
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error('User not found!');
+
+            const userData = userDoc.data()!;
+            const newPending = (userData.pending || 0) + amount;
+
+            transaction.update(userRef, {
+                pending: newPending,
+                status: 'pending'
+            });
+
+            const billRef = adminDb.collection('bills').doc();
+            transaction.set(billRef, {
+                userId,
+                amount,
+                dueDate: new Date(billingMonth + '-01'),
+                notes: notes || `Manually added bill for ${billingMonth}`,
+                status: 'pending',
+                createdAt: new Date()
+            });
+        });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+        revalidatePath(`/dashboard`);
+        return { success: true, message: `Missed bill of ₹${amount.toFixed(2)} added.` };
+    } catch (error: any) {
+        console.error('Error adding missed bill:', error);
+        const message = error instanceof Error ? error.message : 'Failed to add missed bill.';
+        return { success: false, message };
+    }
+}
+
+export async function reverseLastPaymentAction(userId: string) {
+    const adminDb = getAdminDb();
+    if (!userId) return { success: false, message: 'User ID is required.' };
+
+    try {
+        const paymentQuery = adminDb.collection('payments').where('userId', '==', userId);
+        const paymentSnapshot = await paymentQuery.get();
+
+        if (paymentSnapshot.empty) {
+            return { success: false, message: 'No recorded payments found for this user to reverse.' };
+        }
+        
+        const lastPaymentDoc = paymentSnapshot.docs.sort((a, b) => b.data().createdAt.toMillis() - a.data().createdAt.toMillis())[0];
+        
+        const lastPaymentData = lastPaymentDoc.data();
+        const amount = lastPaymentData.amount;
+        
+        const userRef = adminDb.collection('users').doc(userId);
+
+        await adminDb.runTransaction(async (transaction) => {
+            // --- ALL READS FIRST ---
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error('User not found!');
+
+            const paidBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'paid');
+            const paidBillsSnapshot = await transaction.get(paidBillsQuery);
             
-            <Dialog open={isPayBillsOpen} onOpenChange={setIsPayBillsOpen}>
-                <DialogContent className="max-w-lg">
-                    <DialogHeader>
-                        <DialogTitle>Pay Pending Bills for {selectedUser?.name}</DialogTitle>
-                        <DialogDescription>
-                           Click 'Mark as Paid' for each bill the user has paid. The balances will update automatically.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="py-4 max-h-[60vh] overflow-y-auto space-y-2">
-                        {isPending && !payingBillId ? (
-                            <div className="flex justify-center items-center p-8">
-                                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground"/>
-                            </div>
-                        ) : pendingBills.length > 0 ? (
-                            pendingBills.map(bill => (
-                                <div key={bill.id} className="flex items-center justify-between rounded-md border p-3">
-                                    <div>
-                                        <p className="font-medium">{bill.notes}</p>
-                                        <p className="text-sm text-muted-foreground">{bill.date}</p>
-                                    </div>
-                                    <div className="flex items-center gap-4">
-                                        <Badge variant="destructive">₹{bill.amount.toFixed(2)}</Badge>
-                                        <Button
-                                            size="sm"
-                                            onClick={() => handleMarkBillAsPaid(bill.id, bill.amount)}
-                                            disabled={isPending}
-                                        >
-                                            {payingBillId === bill.id ? (
-                                                <Loader2 className="mr-2 h-4 w-4 animate-spin"/>
-                                            ) : (
-                                                <CreditCard className="mr-2 h-4 w-4"/>
-                                            )}
-                                            Mark as Paid
-                                        </Button>
-                                    </div>
-                                </div>
-                            ))
-                        ) : (
-                            <p className="text-center text-muted-foreground py-8">No pending bills for this user. Great!</p>
-                        )}
-                    </div>
-                </DialogContent>
-            </Dialog>
+            // --- ALL WRITES AFTER ---
+            const userData = userDoc.data()!;
+            const newTotalPaid = (userData.totalPaid || 0) - amount;
+            const newPending = (userData.pending || 0) + amount;
 
-            {/* Other dialogs... */}
-            <Dialog open={isEditUserOpen} onOpenChange={setIsEditUserOpen}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>Edit User: {selectedUser?.name}</DialogTitle>
-                        <DialogDescription>
-                            Update the user's details here. Changes will be saved to both authentication and the database.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <form ref={editUserFormRef} action={handleUpdateUser}>
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="edit-name" className="text-right">Name</Label>
-                                <Input id="edit-name" name="name" className="col-span-3" defaultValue={selectedUser?.name} required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="edit-email" className="text-right">Email</Label>
-                                <Input id="edit-email" name="email" type="email" className="col-span-3" defaultValue={selectedUser?.email} required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="edit-phone" className="text-right">Phone</Label>
-                                <Input id="edit-phone" name="phone" className="col-span-3" defaultValue={selectedUser?.phone} required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="edit-password" className="text-right">New Password</Label>
-                                <Input id="edit-password" name="password" type="password" className="col-span-3" placeholder="Leave blank to keep unchanged" />
-                            </div>
-                        </div>
-                        <DialogFooter>
-                            <Button type="submit" disabled={isPending}>
-                                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                Save Changes
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
+            transaction.update(userRef, {
+                totalPaid: newTotalPaid < 0 ? 0 : newTotalPaid,
+                pending: newPending,
+                status: 'pending'
+            });
 
-            <Dialog open={isRecordPaymentOpen} onOpenChange={setIsRecordPaymentOpen}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>Record Single Payment for {selectedUser?.name}</DialogTitle>
-                        <DialogDescription>
-                            This is for miscellaneous payments. To pay off a specific monthly bill, use the 'Pay Pending Bills' option instead.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <form ref={recordPaymentFormRef} action={handleRecordPayment}>
-                        <Input type="hidden" name="userId" value={selectedUser?.id || ''} />
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="amount" className="text-right">Amount (₹)</Label>
-                                <Input id="amount" name="amount" type="number" step="0.01" defaultValue={selectedUser?.pending} className="col-span-3" required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="paymentDate" className="text-right">Date</Label>
-                                <Input id="paymentDate" name="paymentDate" type="date" className="col-span-3" defaultValue={new Date().toISOString().substring(0, 10)} required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="notes" className="text-right">Notes</Label>
-                                <Textarea id="notes" name="notes" placeholder="Optional notes about the payment" className="col-span-3" />
-                            </div>
-                        </div>
-                        <DialogFooter>
-                            <Button type="submit" disabled={isPending}>
-                                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                Record Payment
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
+            let amountToUncover = amount;
+            const sortedPaidBills = paidBillsSnapshot.docs.sort((a, b) => b.data().dueDate.toMillis() - a.data().dueDate.toMillis());
 
-            <Dialog open={isRecalculateOpen} onOpenChange={setIsRecalculateOpen}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>Recalculate Balance for {selectedUser?.name}</DialogTitle>
-                        <DialogDescription>
-                            Select the month up to which the user's payments are clear. All history will be replaced with a single payment record up to this date, and a new pending balance will be calculated.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <form ref={recalculateFormRef} action={handleRecalculateBalance}>
-                        <Input type="hidden" name="userId" value={selectedUser?.id || ''} />
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="untilMonth" className="text-right">Paid Until Month</Label>
-                                <Input id="untilMonth" name="untilMonth" type="month" className="col-span-3" required />
-                            </div>
-                        </div>
-                        <DialogFooter>
-                            <Button type="submit" disabled={isPending}>
-                                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                Recalculate Balance
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
+            for (const doc of sortedPaidBills) {
+                if (amountToUncover > 0) {
+                    transaction.update(doc.ref, { status: 'pending' });
+                    amountToUncover -= doc.data().amount;
+                } else {
+                    break;
+                }
+            }
+
+            transaction.delete(lastPaymentDoc.ref);
+        });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+        revalidatePath(`/dashboard`);
+        return { success: true, message: `Successfully reversed the last payment of ₹${amount.toFixed(2)}.` };
+
+    } catch (error: any) {
+        console.error('Error reversing payment:', error);
+        const message = error instanceof Error ? error.message : 'Failed to reverse payment.';
+        return { success: false, message };
+    }
+}
+
+export async function reverseLastBillAction(userId: string) {
+    const adminDb = getAdminDb();
+    if (!userId) return { success: false, message: 'User ID is required.' };
+
+    try {
+        const billQuery = adminDb.collection('bills').where('userId', '==', userId);
+        const billSnapshot = await billQuery.get();
+
+        if (billSnapshot.empty) {
+            return { success: false, message: 'No recorded bills found for this user to reverse.' };
+        }
+
+        const lastBillDoc = billSnapshot.docs.sort((a, b) => b.data().createdAt.toMillis() - a.data().createdAt.toMillis())[0];
+        const lastBillData = lastBillDoc.data();
+        const amount = lastBillData.amount;
+
+        const userRef = adminDb.collection('users').doc(userId);
+
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error('User not found!');
             
-            <Dialog open={isMarkAsDeceasedOpen} onOpenChange={setIsMarkAsDeceasedOpen}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>Mark {selectedUser?.name} as Deceased</DialogTitle>
-                        <DialogDescription>
-                            This will finalize the user's balance based on the date of death and make their account inactive. This action cannot be easily undone.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <form ref={deceasedFormRef} action={handleMarkAsDeceased}>
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="dateOfDeath" className="text-right">Date of Death</Label>
-                                <Input id="dateOfDeath" name="dateOfDeath" type="date" className="col-span-3" required />
-                            </div>
-                        </div>
-                        <DialogFooter>
-                            <Button type="submit" variant="destructive" disabled={isPending}>
-                                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                Confirm & Finalize Balance
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
+            const userData = userDoc.data()!;
+            const newPending = (userData.pending || 0) - amount;
+
+            transaction.update(userRef, {
+                pending: newPending < 0 ? 0 : newPending,
+                status: newPending <= 0 ? 'paid' : 'pending'
+            });
+
+            transaction.delete(lastBillDoc.ref);
+        });
+        
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+        revalidatePath(`/dashboard`);
+        return { success: true, message: `Successfully reversed the last bill of ₹${amount.toFixed(2)}.` };
+
+    } catch (error: any) {
+        console.error('Error reversing bill:', error);
+        const message = error instanceof Error ? error.message : 'Failed to reverse bill.';
+        return { success: false, message };
+    }
+}
+
+export async function getPendingMonthsForUser(userId: string): Promise<string> {
+    if (!userId) return 'N/A';
+    const adminDb = getAdminDb();
+    try {
+        const billsSnapshot = await adminDb.collection('bills')
+            .where('userId', '==', userId)
+            .where('status', '==', 'pending')
+            .orderBy('dueDate', 'asc')
+            .get();
+
+        if (billsSnapshot.empty) {
+            return 'None';
+        }
+
+        const months = billsSnapshot.docs.map(doc => {
+            const data = doc.data();
+            const dueDate = data.dueDate.toDate(); 
+            return format(dueDate, 'MMM-yy'); 
+        });
+
+        return months.join(', ');
+
+    } catch (error: any) {
+        console.error(`Error fetching pending months for user ${userId}:`, error);
+        return 'Error fetching';
+    }
+}
+export async function splitMissedBillAction(formData: FormData) {
+    const adminDb = getAdminDb();
+    const userId = formData.get('userId') as string;
+    const totalAmount = parseFloat(formData.get('totalAmount') as string);
+    const startMonthStr = formData.get('startMonth') as string; 
+    const endMonthStr = formData.get('endMonth') as string; 
+
+    if (!userId || isNaN(totalAmount) || totalAmount <= 0 || !startMonthStr || !endMonthStr) {
+        return { success: false, message: 'Invalid data provided. Please fill all fields correctly.' };
+    }
+
+    try {
+        const startDate = startOfMonth(new Date(`${startMonthStr}-01T12:00:00Z`));
+        const endDate = startOfMonth(new Date(`${endMonthStr}-01T12:00:00Z`));
+        
+        if (startDate > endDate) {
+            return { success: false, message: 'Start month must be before or same as end month.' };
+        }
+
+        const numberOfMonths = differenceInMonths(endDate, startDate) + 1;
+        if (numberOfMonths <= 0) {
+            return { success: false, message: 'Invalid month range.' };
+        }
+
+        const totalAmountInCents = Math.round(totalAmount * 100);
+        const amountPerMonthInCents = Math.floor(totalAmountInCents / numberOfMonths);
+        let remainderInCents = totalAmountInCents % numberOfMonths;
+        
+        const batch = adminDb.batch();
+
+        for (let i = 0; i < numberOfMonths; i++) {
+            const billingDate = addMonths(startDate, i);
+            const billRef = adminDb.collection('bills').doc();
+
+            let currentMonthAmountInCents = amountPerMonthInCents;
+            if (remainderInCents > 0) {
+                currentMonthAmountInCents++;
+                remainderInCents--;
+            }
             
-            <Dialog open={isSplitBillOpen} onOpenChange={setIsSplitBillOpen}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>Add & Split Bill for {selectedUser?.name}</DialogTitle>
-                        <DialogDescription>
-                            Enter a total amount and a date range. The system will split the amount evenly across those months.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <form ref={splitBillFormRef} action={handleSplitBill}>
-                        <Input type="hidden" name="userId" value={selectedUser?.id || ''} />
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="startMonth" className="text-right">Start Month</Label>
-                                <Input id="startMonth" name="startMonth" type="month" className="col-span-3" required />
-                            </div>
-                             <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="endMonth" className="text-right">End Month</Label>
-                                <Input id="endMonth" name="endMonth" type="month" className="col-span-3" required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="totalAmount" className="text-right">Total Amount (₹)</Label>
-                                <Input id="totalAmount" name="totalAmount" type="number" step="0.01" placeholder="e.g., 1000" className="col-span-3" required />
-                            </div>
-                        </div>
-                        <DialogFooter>
-                            <Button type="submit" disabled={isPending}>
-                                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                Split & Save
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
+            batch.set(billRef, {
+                userId,
+                amount: currentMonthAmountInCents / 100,
+                dueDate: billingDate,
+                notes: `Bill for ${format(billingDate, 'MMMM yyyy')}`,
+                status: 'pending',
+                createdAt: new Date()
+            });
+        }
 
-            <Dialog open={isAddMissedBillOpen} onOpenChange={setIsAddMissedBillOpen}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>Add Single Missed Bill for {selectedUser?.name}</DialogTitle>
-                        <DialogDescription>
-                            Add a charge for a missed payment from a previous month. This will increase their pending balance.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <form ref={addMissedBillFormRef} action={handleAddMissedBill}>
-                        <Input type="hidden" name="userId" value={selectedUser?.id || ''} />
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="billingMonth" className="text-right">Billing Month</Label>
-                                <Input id="billingMonth" name="billingMonth" type="month" className="col-span-3" required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="amount" className="text-right">Amount (₹)</Label>
-                                <Input id="amount" name="amount" type="number" step="0.01" defaultValue={250} className="col-span-3" required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="notes" className="text-right">Notes</Label>
-                                <Textarea id="notes" name="notes" placeholder="e.g., Missed payment for January 2024" className="col-span-3" />
-                            </div>
-                        </div>
-                        <DialogFooter>
-                            <Button type="submit" disabled={isPending}>
-                                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                Add Bill
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
+        const userRef = adminDb.collection('users').doc(userId);
+        batch.update(userRef, {
+            pending: admin.firestore.FieldValue.increment(totalAmount),
+            status: 'pending'
+        });
 
-            <AlertDialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>{confirmAction?.title}</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            {confirmAction?.description}
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel onClick={() => setConfirmAction(null)}>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                            disabled={isPending}
-                            onClick={() => {
-                                confirmAction?.action();
-                                setIsConfirmOpen(false);
-                                setConfirmAction(null);
-                            }}
-                        >
-                            {isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Continue"}
-                        </AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
-        </>
-    );
+        await batch.commit();
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+        revalidatePath('/dashboard');
+
+        return { success: true, message: `Successfully split ₹${totalAmount} into ${numberOfMonths} bills.` };
+    } catch (error: any) {
+        console.error('Error splitting bill:', error);
+        return { success: false, message: error.message || 'An unexpected error occurred while splitting the bill.' };
+    }
 }
