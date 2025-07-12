@@ -22,6 +22,7 @@ type UsersClientProps = {
     deleteUserAction: (userId: string) => Promise<{ success: boolean; message: string; }>;
 };
 
+// FIX: This component is a named export, not a default one.
 export function UsersClient({ initialUsers, addUserAction, deleteUserAction }: UsersClientProps) {
     const [filteredUsers, setFilteredUsers] = useState(initialUsers);
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
@@ -40,11 +41,20 @@ export function UsersClient({ initialUsers, addUserAction, deleteUserAction }: U
         setFilteredUsers(initialUsers);
     }, [initialUsers]);
 
-    const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>, action: (formData: FormData) => void) => {
+    const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
-        action(new FormData(e.currentTarget));
+        startTransition(async () => {
+            const result = await addUserAction(new FormData(e.currentTarget));
+            if (result.success) {
+                toast({ title: 'Success', description: result.message });
+                setIsAddUserOpen(false);
+                router.refresh(); 
+            } else {
+                toast({ variant: 'destructive', title: 'Error', description: result.message });
+            }
+        });
     };
-
+    
     const handleAction = (action: () => Promise<any>) => {
         startTransition(async () => {
             const result = await action();
@@ -118,7 +128,7 @@ export function UsersClient({ initialUsers, addUserAction, deleteUserAction }: U
             <Dialog open={isAddUserOpen} onOpenChange={setIsAddUserOpen}>
                 <DialogContent>
                     <DialogHeader><DialogTitle>Add New User</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleFormSubmit(e, addUserAction)} className="space-y-4 pt-4">
+                    <form onSubmit={handleFormSubmit} className="space-y-4 pt-4">
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-name" className="text-right">Name</Label><Input id="add-name" name="name" required className="col-span-3"/></div>
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-phone" className="text-right">Phone</Label><Input id="add-phone" name="phone" required className="col-span-3"/></div>
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-email" className="text-right">Email</Label><Input id="add-email" name="email" type="email" required className="col-span-3"/></div>
@@ -152,7 +162,8 @@ export function UsersClient({ initialUsers, addUserAction, deleteUserAction }: U
                     <AlertDialogHeader><AlertDialogTitle>{confirmAction?.title}</AlertDialogTitle><AlertDialogDescription>{confirmAction?.description}</AlertDialogDescription></AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel onClick={() => setIsConfirmOpen(false)}>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => {actionToConfirm?.action(); setIsConfirmOpen(false);}} disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Continue"}</AlertDialogAction>
+                        {/* FIX: Changed `actionToConfirm` to `confirmAction` to match the state variable name */}
+                        <AlertDialogAction onClick={() => {confirmAction?.action(); setIsConfirmOpen(false);}} disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Continue"}</AlertDialogAction>
                     </AlertDialogFooter>
                  </AlertDialogContent>
             </AlertDialog>
