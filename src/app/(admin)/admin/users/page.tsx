@@ -40,6 +40,7 @@ async function getUsers(): Promise<User[]> {
         let lastPaidOn = 'N/A';
         if (!paymentsSnapshot.empty) {
             const payment = paymentsSnapshot.docs[0].data();
+            // Handle both Firestore Timestamps and string dates
             const paymentDate = payment.date?.toDate ? payment.date.toDate() : new Date(payment.date);
             if (isValid(paymentDate)) {
                 lastPaidOn = format(paymentDate, 'dd/MM/yyyy');
