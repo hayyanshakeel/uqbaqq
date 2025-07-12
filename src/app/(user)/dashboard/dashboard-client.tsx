@@ -31,7 +31,8 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
         try {
             const result = await createPaymentLink(userId);
             if (result.success && result.url) {
-                window.open(result.url, '_blank');
+                // Change to direct navigation to avoid popup blockers
+                window.location.href = result.url;
             } else {
                 alert(result.message || 'Failed to create payment link');
             }
@@ -48,7 +49,8 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
         try {
             const result = await createPaymentLinkForBill(userId, billId);
             if (result.success && result.url) {
-                window.open(result.url, '_blank');
+                // Change to direct navigation
+                window.location.href = result.url;
             } else {
                 alert(result.message || 'Failed to create payment link');
             }
@@ -61,25 +63,21 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
     };
     
     const handleViewReceipt = async (payment: PaymentHistoryItem) => {
-        // Use the unique payment document ID for loading state
         setLoadingReceiptId(payment.id); 
         try {
-            // If it's a Razorpay payment and has a direct URL, use it.
             if (payment.receipt_url) {
                 window.open(payment.receipt_url, '_blank');
                 return; 
             }
-            // If it's a Razorpay payment without a stored URL, fetch it.
             if (payment.razorpay_payment_id) {
                  const result = await getReceiptUrl(payment.razorpay_payment_id);
                 if (result.success && result.url) {
                     window.open(result.url, '_blank');
                 } else {
-                    alert(result.message || 'Could not retrieve Razorpay receipt.');
+                    router.push(`/receipt/${payment.id}`);
                 }
                 return;
             }
-            // Otherwise, it's a manual payment, so navigate to our internal receipt page.
             router.push(`/receipt/${payment.id}`);
 
         } catch (error) {
@@ -92,7 +90,6 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
 
     return (
         <div className="container mx-auto p-6 space-y-6">
-            {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold">Welcome, {user.name}!</h1>
@@ -100,7 +97,6 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
                 </div>
             </div>
 
-            {/* Stats Cards */}
             <div className="grid gap-4 md:grid-cols-2">
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -129,24 +125,18 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
                                 disabled={isLoading}
                                 className="mt-2"
                             >
-                                {isLoading ? 'Processing...' : 'Pay Now'}
+                                {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin"/> Processing...</>) : 'Pay Now'}
                             </Button>
                         )}
                     </CardContent>
                 </Card>
             </div>
 
-            {/* Pending Bills */}
             {pendingBills.length > 0 && (
                 <Card>
                     <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <Receipt className="h-5 w-5" />
-                            Pending Bills
-                        </CardTitle>
-                        <CardDescription>
-                            Outstanding bills that need payment
-                        </CardDescription>
+                        <CardTitle className="flex items-center gap-2"><Receipt className="h-5 w-5" />Pending Bills</CardTitle>
+                        <CardDescription>Outstanding bills that need payment</CardDescription>
                     </CardHeader>
                     <CardContent>
                         <div className="space-y-3">
@@ -165,7 +155,7 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
                                             onClick={() => handleBillPayment(bill.id)}
                                             disabled={loadingBillId === bill.id}
                                         >
-                                            {loadingBillId === bill.id ? 'Processing...' : 'Pay'}
+                                            {loadingBillId === bill.id ? <Loader2 className="animate-spin"/> : 'Pay'}
                                         </Button>
                                     </div>
                                 </div>
@@ -175,42 +165,24 @@ export default function DashboardClient({ dashboardData, userId }: DashboardClie
                 </Card>
             )}
 
-            {/* Payment History */}
             <Card>
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                        <History className="h-5 w-5" />
-                        Payment History
-                    </CardTitle>
-                    <CardDescription>
-                        Your recent payment transactions
-                    </CardDescription>
+                    <CardTitle className="flex items-center gap-2"><History className="h-5 w-5" />Payment History</CardTitle>
+                    <CardDescription>Your recent payment transactions</CardDescription>
                 </CardHeader>
                 <CardContent>
                     {paymentHistory.length === 0 ? (
-                        <div className="text-center py-8 text-muted-foreground">
-                            No payment history found
-                        </div>
+                        <div className="text-center py-8 text-muted-foreground">No payment history found</div>
                     ) : (
                         <div className="space-y-3">
                             {paymentHistory.map((payment) => (
                                 <div key={payment.id} className="flex items-center justify-between p-3 border rounded">
                                     <div className="flex-1">
                                         <div className="font-medium">{payment.notes}</div>
-                                        <div className="text-sm text-muted-foreground">
-                                            {payment.date}
-                                            {payment.razorpay_payment_id && (
-                                                <span className="ml-2 text-xs">
-                                                    ID: {payment.razorpay_payment_id}
-                                                </span>
-                                            )}
-                                        </div>
+                                        <div className="text-sm text-muted-foreground">{payment.date}</div>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                        <Badge variant="secondary">
-                                            ₹{payment.amount.toLocaleString()}
-                                        </Badge>
-                                        {/* This button will now show for ALL payments */}
+                                        <Badge variant="secondary">₹{payment.amount.toLocaleString()}</Badge>
                                         <Button
                                             variant="outline"
                                             size="sm"
