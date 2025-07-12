@@ -486,9 +486,14 @@ export async function reverseLastPaymentAction(userId: string) {
         const userRef = adminDb.collection('users').doc(userId);
 
         await adminDb.runTransaction(async (transaction) => {
+            // --- ALL READS FIRST ---
             const userDoc = await transaction.get(userRef);
             if (!userDoc.exists) throw new Error('User not found!');
+
+            const paidBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'paid');
+            const paidBillsSnapshot = await transaction.get(paidBillsQuery);
             
+            // --- ALL WRITES AFTER ---
             const userData = userDoc.data()!;
             const newTotalPaid = (userData.totalPaid || 0) - amount;
             const newPending = (userData.pending || 0) + amount;
@@ -499,18 +504,15 @@ export async function reverseLastPaymentAction(userId: string) {
                 status: 'pending'
             });
 
-            // Re-open bills that this payment might have covered
-            // This is a simplified logic. A more complex system might track which specific bills a payment covers.
-            const paidBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'paid');
-            const paidBillsSnapshot = await transaction.get(paidBillsQuery);
             let amountToUncover = amount;
-            
             const sortedPaidBills = paidBillsSnapshot.docs.sort((a, b) => b.data().dueDate.toMillis() - a.data().dueDate.toMillis());
 
             for (const doc of sortedPaidBills) {
                 if (amountToUncover > 0) {
                     transaction.update(doc.ref, { status: 'pending' });
                     amountToUncover -= doc.data().amount;
+                } else {
+                    break;
                 }
             }
 
