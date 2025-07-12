@@ -2,7 +2,7 @@
 
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
-import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid, format } from 'date-fns';
+import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid, format, isAfter } from 'date-fns';
 import { getBillingSettings } from '@/app/(admin)/admin/settings/actions';
 import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 import * as admin from 'firebase-admin';
@@ -17,16 +17,18 @@ const feeStructure = [
 ];
 
 // --- Helper function to calculate dues for a given period ---
-function calculateDuesForPeriod(startDateStr: string, endDateStr: string): number {
+function calculateDuesForPeriod(startDateStr: string, endDateStr: string): { totalDues: number; monthlyBreakdown: { month: Date, fee: number }[] } {
     const startDate = startOfMonth(parse(startDateStr, 'yyyy-MM-dd', new Date()));
     const endDate = startOfMonth(parse(endDateStr, 'yyyy-MM-dd', new Date()));
     let totalDues = 0;
+    const monthlyBreakdown: { month: Date, fee: number }[] = [];
+
 
     if (!isValid(startDate) || !isValid(endDate)) {
         throw new Error(`Invalid date format encountered. Start: "${startDateStr}", End: "${endDateStr}"`);
     }
 
-    if (startDate > endDate) return 0;
+    if (startDate > endDate) return { totalDues: 0, monthlyBreakdown: [] };
     
     const totalMonths = differenceInMonths(endDate, startDate) + 1;
 
@@ -41,10 +43,12 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): numbe
 
         if (applicableTier) {
             totalDues += applicableTier.fee;
+            monthlyBreakdown.push({ month: monthDate, fee: applicableTier.fee });
         }
     }
-    return totalDues;
+    return { totalDues, monthlyBreakdown };
 }
+
 export async function sendPaymentLinkAction(userId: string) {
     if (!userId) {
         return { success: false, message: 'User ID is required.' };
@@ -87,8 +91,8 @@ export async function markAsDeceasedAction(userId: string, formData: FormData) {
         const userData = userDoc.data()!;
         const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
         
-        const finalDues = calculateDuesForPeriod(joiningDate, dateOfDeathStr);
-        const finalPending = finalDues - (userData.totalPaid || 0);
+        const { totalDues } = calculateDuesForPeriod(joiningDate, dateOfDeathStr);
+        const finalPending = totalDues - (userData.totalPaid || 0);
 
         await userRef.update({
             status: 'deceased',
@@ -108,84 +112,92 @@ export async function markAsDeceasedAction(userId: string, formData: FormData) {
     }
 }
 
-export async function recordBulkPaymentAction(userId: string, formData: FormData) {
-    const fromMonthStr = formData.get('fromMonth') as string;
-    const toMonthStr = formData.get('toMonth') as string;
+export async function recalculateBalanceUntilDateAction(userId: string, formData: FormData) {
+    const untilMonthStr = formData.get('untilMonth') as string; // Expects "YYYY-MM" format
 
-    if (!userId || !fromMonthStr || !toMonthStr) {
-        return { success: false, message: 'User ID, From Month, and To Month are required.' };
+    if (!userId || !untilMonthStr) {
+        return { success: false, message: 'User ID and "Paid Until" month are required.' };
     }
-
     try {
         const adminDb = getAdminDb();
         const userRef = adminDb.collection('users').doc(userId);
-        
-        const startDate = startOfMonth(new Date(`${fromMonthStr}-01T12:00:00Z`));
-        const endDate = lastDayOfMonth(new Date(`${toMonthStr}-01T12:00:00Z`));
 
-        // CORRECTED LOGIC: Fetch all pending bills for the user first.
-        const allPendingBillsQuery = adminDb.collection('bills')
-            .where('userId', '==', userId)
-            .where('status', '==', 'pending');
-
-        const allPendingBillsSnapshot = await allPendingBillsQuery.get();
-        
-        // Then, filter those bills in the code to avoid complex index requirements.
-        const billsToPay = allPendingBillsSnapshot.docs.filter(doc => {
-            const dueDate = doc.data().dueDate.toDate();
-            return dueDate >= startDate && dueDate <= endDate;
-        });
-
-        if (billsToPay.length === 0) {
-            return { success: false, message: 'No pending bills found in the selected date range.' };
-        }
-
-        let totalAmountPaid = 0;
-        billsToPay.forEach(doc => {
-            totalAmountPaid += doc.data().amount || 0;
-        });
+        const untilDate = lastDayOfMonth(new Date(`${untilMonthStr}-01T12:00:00Z`));
+        const today = new Date();
 
         await adminDb.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
             if (!userDoc.exists) throw new Error('User not found!');
-            
             const userData = userDoc.data()!;
-            const newTotalPaid = (userData.totalPaid || 0) + totalAmountPaid;
-            const newPending = (userData.pending || 0) - totalAmountPaid;
+            const joiningDate = new Date(userData.joined).toISOString().split('T')[0];
 
+            // 1. Clear existing bills and payments for this user
+            const billsQuery = adminDb.collection('bills').where('userId', '==', userId);
+            const paymentsQuery = adminDb.collection('payments').where('userId', '==', userId);
+            const [billsSnapshot, paymentsSnapshot] = await Promise.all([transaction.get(billsQuery), transaction.get(paymentsQuery)]);
+            
+            billsSnapshot.forEach(doc => transaction.delete(doc.ref));
+            paymentsSnapshot.forEach(doc => transaction.delete(doc.ref));
+
+            // 2. Calculate paid amount and create a single consolidated payment
+            const { totalDues: paidAmount } = calculateDuesForPeriod(joiningDate, format(untilDate, 'yyyy-MM-dd'));
+            if (paidAmount > 0) {
+                const paymentRef = adminDb.collection('payments').doc();
+                transaction.set(paymentRef, {
+                    userId,
+                    amount: paidAmount,
+                    date: untilDate,
+                    notes: `Bulk historic payment record until ${format(untilDate, 'MMM yyyy')}.`,
+                    type: 'manual_recalculation',
+                    createdAt: new Date()
+                });
+            }
+
+            // 3. Calculate new pending balance and generate new pending bills
+            let newPending = 0;
+            const pendingPeriodStart = addMonths(untilDate, 1);
+
+            if (isAfter(today, pendingPeriodStart)) {
+                const { totalDues: pendingAmount, monthlyBreakdown: pendingBills } = calculateDuesForPeriod(
+                    format(pendingPeriodStart, 'yyyy-MM-dd'),
+                    format(today, 'yyyy-MM-dd')
+                );
+                newPending = pendingAmount;
+
+                // Create new bill documents for the pending period
+                pendingBills.forEach(bill => {
+                    const billRef = adminDb.collection('bills').doc();
+                    transaction.set(billRef, {
+                        userId,
+                        amount: bill.fee,
+                        dueDate: bill.month,
+                        notes: `Bill for ${format(bill.month, 'MMMM yyyy')}`,
+                        status: 'pending',
+                        createdAt: new Date()
+                    });
+                });
+            }
+
+            // 4. Update user document
             transaction.update(userRef, {
-                totalPaid: newTotalPaid,
-                pending: newPending < 0 ? 0 : newPending,
+                totalPaid: paidAmount,
+                pending: newPending,
                 status: newPending <= 0 ? 'paid' : 'pending'
-            });
-
-            // Update the status of only the bills within the selected date range.
-            billsToPay.forEach(doc => {
-                transaction.update(doc.ref, { status: 'paid' });
-            });
-
-            const paymentRef = adminDb.collection('payments').doc();
-            transaction.set(paymentRef, {
-                userId,
-                amount: totalAmountPaid,
-                date: new Date(),
-                notes: `Bulk payment for ${fromMonthStr} to ${toMonthStr}.`,
-                type: 'manual_bulk_record',
-                createdAt: new Date()
             });
         });
 
         revalidatePath('/admin/users');
         revalidatePath('/admin/dashboard');
-        revalidatePath(`/dashboard`);
+        revalidatePath('/dashboard');
 
-        return { success: true, message: `Successfully recorded payment of ₹${totalAmountPaid.toFixed(2)} for the selected period.` };
+        return { success: true, message: `Balance recalculated successfully. User is now marked as paid until ${untilMonthStr}.` };
 
     } catch (error: any) {
-        console.error("Error in bulk record action:", error);
+        console.error("Error in recalculate balance action:", error);
         return { success: false, message: error.message || 'An unexpected error occurred.' };
     }
 }
+
 
 export async function updateUserAction(userId: string, formData: FormData) {
     const adminDb = getAdminDb();
@@ -236,9 +248,9 @@ export async function addUserAction(formData: FormData) {
     const phone = formData.get('phone') as string;
     const email = formData.get('email') as string;
     const password = formData.get('password') as string;
-    const joiningDate = formData.get('joining_date') as string;
+    const joiningDateStr = formData.get('joining_date') as string;
 
-    if (!name || !phone || !email || !password || !joiningDate) {
+    if (!name || !phone || !email || !password || !joiningDateStr) {
         return { success: false, message: 'All fields are required.' };
     }
 
@@ -254,20 +266,38 @@ export async function addUserAction(formData: FormData) {
         });
         
         const todayStr = new Date().toISOString().split('T')[0];
-        const totalDues = calculateDuesForPeriod(joiningDate, todayStr);
+        const { totalDues, monthlyBreakdown } = calculateDuesForPeriod(joiningDateStr, todayStr);
 
-        await adminDb.collection('users').doc(userRecord.uid).set({
+        const batch = adminDb.batch();
+
+        const userRef = adminDb.collection('users').doc(userRecord.uid);
+        batch.set(userRef, {
             name,
             phone,
             email,
-            status: 'pending',
-            joined: new Date(joiningDate).toISOString(),
+            status: totalDues > 0 ? 'pending' : 'paid',
+            joined: new Date(joiningDateStr).toISOString(),
             totalPaid: 0,
             pending: totalDues,
         });
         
+        // Create individual bill documents for each pending month
+        monthlyBreakdown.forEach(bill => {
+            const billRef = adminDb.collection('bills').doc();
+            batch.set(billRef, {
+                userId: userRecord.uid,
+                amount: bill.fee,
+                dueDate: bill.month,
+                notes: `Automatic bill for ${format(bill.month, 'MMMM yyyy')}`,
+                status: 'pending',
+                createdAt: new Date()
+            });
+        });
+
+        await batch.commit();
+        
         revalidatePath('/admin/users');
-        return { success: true, message: `${name} has been successfully added.` };
+        return { success: true, message: `${name} has been successfully added with ${monthlyBreakdown.length} pending bills.` };
     } catch (error: any) {
         console.error('Error adding user:', error);
         let message = 'Failed to add user.';
@@ -288,7 +318,20 @@ export async function deleteUserAction(userId: string) {
     }
 
     try {
-        await adminDb.collection('users').doc(userId).delete();
+        // Also delete bills and payments associated with the user
+        const batch = adminDb.batch();
+        const billsQuery = adminDb.collection('bills').where('userId', '==', userId);
+        const paymentsQuery = adminDb.collection('payments').where('userId', '==', userId);
+        
+        const [billsSnapshot, paymentsSnapshot] = await Promise.all([billsQuery.get(), paymentsQuery.get()]);
+        
+        billsSnapshot.forEach(doc => batch.delete(doc.ref));
+        paymentsSnapshot.forEach(doc => batch.delete(doc.ref));
+        
+        const userRef = adminDb.collection('users').doc(userId);
+        batch.delete(userRef);
+        
+        await batch.commit();
         await adminAuth.deleteUser(userId);
         
         revalidatePath('/admin/users');
@@ -318,9 +361,11 @@ export async function recordPaymentAction(formData: FormData) {
 
     try {
         const userRef = adminDb.collection('users').doc(userId);
-        const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending');
+        // Get pending bills and sort them by due date to pay off the oldest ones first
+        const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending').orderBy('dueDate', 'asc');
         
         const pendingBillsSnapshot = await pendingBillsQuery.get();
+        let remainingAmountToApply = amount;
 
         await adminDb.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
@@ -336,12 +381,19 @@ export async function recordPaymentAction(formData: FormData) {
                 status: newPending <= 0 ? 'paid' : 'pending'
             });
 
-            if (newPending <= 0) {
-                pendingBillsSnapshot.docs.forEach(doc => {
-                    transaction.update(doc.ref, { status: 'paid' });
-                });
+            // Mark oldest bills as paid
+            for (const doc of pendingBillsSnapshot.docs) {
+                if (remainingAmountToApply > 0) {
+                    const billAmount = doc.data().amount;
+                    if (remainingAmountToApply >= billAmount) {
+                        transaction.update(doc.ref, { status: 'paid' });
+                        remainingAmountToApply -= billAmount;
+                    }
+                } else {
+                    break;
+                }
             }
-
+            
             const paymentRef = adminDb.collection('payments').doc();
             transaction.set(paymentRef, {
                 userId,
@@ -446,6 +498,21 @@ export async function reverseLastPaymentAction(userId: string) {
                 pending: newPending,
                 status: 'pending'
             });
+
+            // Re-open bills that this payment might have covered
+            // This is a simplified logic. A more complex system might track which specific bills a payment covers.
+            const paidBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'paid');
+            const paidBillsSnapshot = await transaction.get(paidBillsQuery);
+            let amountToUncover = amount;
+            
+            const sortedPaidBills = paidBillsSnapshot.docs.sort((a, b) => b.data().dueDate.toMillis() - a.data().dueDate.toMillis());
+
+            for (const doc of sortedPaidBills) {
+                if (amountToUncover > 0) {
+                    transaction.update(doc.ref, { status: 'pending' });
+                    amountToUncover -= doc.data().amount;
+                }
+            }
 
             transaction.delete(lastPaymentDoc.ref);
         });
