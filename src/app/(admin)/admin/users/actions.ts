@@ -3,8 +3,6 @@
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
 import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid, format, isAfter } from 'date-fns';
-import { getBillingSettings } from '@/app/(admin)/admin/settings/actions';
-import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 import * as admin from 'firebase-admin';
 import { Bill } from '@/lib/data-service';
 
@@ -147,6 +145,7 @@ export async function recalculateBalanceUntilDateAction(userId: string, formData
     }
 }
 
+
 export async function reverseLastPaymentAction(userId: string) {
     const adminDb = getAdminDb();
     if (!userId) return { success: false, message: 'User ID is required.' };
@@ -164,7 +163,6 @@ export async function reverseLastPaymentAction(userId: string) {
             const userDoc = await transaction.get(userRef);
             if (!userDoc.exists) throw new Error('User not found!');
             
-            const userData = userDoc.data()!;
             transaction.update(userRef, {
                 totalPaid: admin.firestore.FieldValue.increment(-amountToReverse),
                 pending: admin.firestore.FieldValue.increment(amountToReverse),
