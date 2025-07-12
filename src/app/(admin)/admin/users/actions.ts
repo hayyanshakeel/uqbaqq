@@ -64,12 +64,6 @@ const RecalculateSchema = z.object({
     untilMonth: z.string().min(1, 'A date is required.')
 });
 
-const SinglePaymentSchema = z.object({
-    amount: z.coerce.number().positive('Amount must be positive.'),
-    date: z.string().min(1, 'Date is required.'),
-    notes: z.string().optional(),
-});
-
 const MissedBillSchema = z.object({
     amount: z.coerce.number().positive('Amount must be positive.'),
     date: z.string().min(1, 'Date is required.'),
@@ -171,10 +165,42 @@ export async function recalculateBalanceUntilDateAction(userId: string, formData
             const joiningDate = userDoc.data()!.joined;
             const paidUntilDate = endOfMonth(parseDate(untilMonth)).toISOString();
 
-            const { totalDues: totalAmountPaid } = calculateDuesForPeriod(joiningDate, paidUntilDate);
-            const nextMonthAfterPaid = addMonths(parseDate(paidUntilDate), 1).toISOString();
-            const { totalDues: newPendingAmount } = calculateDuesForPeriod(nextMonthAfterPaid, new Date().toISOString());
+            // Clear existing bills and payments for this user
+            const billsSnapshot = await adminDb.collection('bills').where('userId', '==', userId).get();
+            billsSnapshot.forEach(doc => transaction.delete(doc.ref));
+            const paymentsSnapshot = await adminDb.collection('payments').where('userId', '==', userId).get();
+            paymentsSnapshot.forEach(doc => transaction.delete(doc.ref));
 
+            // Calculate past dues and create payment history
+            const { totalDues: totalAmountPaid, monthlyBreakdown: pastBreakdown } = calculateDuesForPeriod(joiningDate, paidUntilDate);
+            pastBreakdown.forEach(payment => {
+                const paymentRef = adminDb.collection('payments').doc();
+                transaction.set(paymentRef, {
+                    userId,
+                    amount: payment.fee,
+                    date: payment.month,
+                    notes: `Bulk recorded payment for ${format(payment.month, 'MMMM yyyy')}`,
+                    type: 'manual_bulk_record',
+                    createdAt: new Date()
+                });
+            });
+
+            // Calculate pending dues and create new bills
+            const nextMonthAfterPaid = addMonths(parseDate(paidUntilDate), 1).toISOString();
+            const { totalDues: newPendingAmount, monthlyBreakdown: futureBreakdown } = calculateDuesForPeriod(nextMonthAfterPaid, new Date().toISOString());
+            futureBreakdown.forEach(bill => {
+                const billRef = adminDb.collection('bills').doc();
+                transaction.set(billRef, {
+                    userId,
+                    amount: bill.fee,
+                    dueDate: bill.month,
+                    notes: `Monthly bill for ${format(bill.month, 'MMMM yyyy')}`,
+                    status: 'pending',
+                    createdAt: new Date()
+                });
+            });
+
+            // Update the user's main record
             transaction.update(userRef, {
                 totalPaid: totalAmountPaid,
                 pending: newPendingAmount,
@@ -238,44 +264,6 @@ export async function reverseLastPaymentAction(userId: string) {
     } catch (error: any) {
         console.error('Error reversing payment:', error);
         return { success: false, message: error.message || 'Failed to reverse payment.' };
-    }
-}
-
-export async function addSinglePaymentAction(userId: string, formData: FormData) {
-    const validatedFields = SinglePaymentSchema.safeParse(Object.fromEntries(formData));
-    if (!validatedFields.success) return { success: false, message: 'Invalid payment data.' };
-    
-    const { amount, date, notes } = validatedFields.data;
-    const adminDb = getAdminDb();
-    const userRef = adminDb.collection('users').doc(userId);
-
-    try {
-        await adminDb.runTransaction(async (transaction) => {
-            const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) throw new Error("User not found.");
-            const userData = userDoc.data()!;
-
-            const newTotalPaid = (userData.totalPaid || 0) + amount;
-            const newPending = Math.max(0, (userData.pending || 0) - amount);
-            
-            transaction.update(userRef, {
-                totalPaid: newTotalPaid,
-                pending: newPending,
-                status: newPending > 0 ? 'pending' : 'paid'
-            });
-
-            const paymentRef = adminDb.collection('payments').doc();
-            transaction.set(paymentRef, {
-                userId, amount, date: parseISO(date), notes: notes || 'Manual payment entry',
-                type: 'manual_payment', createdAt: new Date()
-            });
-        });
-
-        revalidatePath('/admin/users');
-        revalidatePath('/dashboard'); // Revalidate user dashboard
-        return { success: true, message: 'Payment recorded successfully.' };
-    } catch (error: any) {
-        return { success: false, message: error.message || 'Failed to record payment.' };
     }
 }
 
@@ -351,7 +339,6 @@ export async function markBillAsPaidAction(userId: string, billId: string, billA
     const billRef = adminDb.collection('bills').doc(billId);
 
     try {
-        // FIX: Fetch billDoc outside the transaction to access its data for the notes.
         const billDoc = await billRef.get();
         if (!billDoc.exists) throw new Error('Bill not found');
 
