@@ -10,10 +10,11 @@ export interface User {
     name: string;
     email?: string;
     phone?: string;
-    status: 'paid' | 'pending' | 'overdue';
+    status: 'paid' | 'pending' | 'overdue' | 'deceased';
     joined: string; // Should be ISO string
     totalPaid: number;
     pending: number;
+    lastPaidOn?: string; // New field for the last payment date
 }
 
 export interface Bill {
@@ -149,9 +150,25 @@ export async function getAllUsers(): Promise<User[]> {
         return [];
     }
 
-    const users = snapshot.docs.map(doc => {
+    const users = await Promise.all(snapshot.docs.map(async (doc) => {
         const data = doc.data();
         const joinedDate = data.joined ? new Date(data.joined) : new Date();
+
+        // Fetch the last payment for each user
+        const paymentsSnapshot = await adminDb.collection('payments')
+            .where('userId', '==', doc.id)
+            .orderBy('date', 'desc')
+            .limit(1)
+            .get();
+
+        let lastPaidOn = 'N/A';
+        if (!paymentsSnapshot.empty) {
+            const lastPayment = paymentsSnapshot.docs[0].data();
+            if (lastPayment.date) {
+                lastPaidOn = format(lastPayment.date.toDate(), 'dd/MM/yyyy');
+            }
+        }
+
         return {
             id: doc.id,
             name: data.name || 'N/A',
@@ -161,8 +178,9 @@ export async function getAllUsers(): Promise<User[]> {
             totalPaid: data.totalPaid || 0,
             pending: data.pending || 0,
             email: data.email || undefined,
+            lastPaidOn: lastPaidOn,
         };
-    });
+    }));
 
     return users.filter(user => user.email?.toLowerCase() !== ADMIN_EMAIL);
 }
