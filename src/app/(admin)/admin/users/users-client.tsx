@@ -4,7 +4,7 @@ import { useState, useTransition, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, HeartCrack, Send, SplitSquareHorizontal, RefreshCw } from "lucide-react";
@@ -45,6 +45,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [isMarkAsDeceasedOpen, setIsMarkAsDeceasedOpen] = useState(false);
     const [isPayBillsOpen, setIsPayBillsOpen] = useState(false);
     const [pendingBills, setPendingBills] = useState<Bill[]>([]);
+    const [isLoadingBills, setIsLoadingBills] = useState(false); // New state for loading bills
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{ action: () => void, title: string, description: string } | null>(null);
     const [isExporting, setIsExporting] = useState(false);
@@ -153,7 +154,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
             const result = await markBillAsPaidAction(selectedUser.id, billId, billAmount);
              if (result.success) {
                 toast({ title: "Success", description: result.message });
-                // Instantly remove the paid bill from the list in the dialog
                 const updatedBills = pendingBills.filter(bill => bill.id !== billId);
                 setPendingBills(updatedBills);
                 if (updatedBills.length === 0) {
@@ -275,11 +275,17 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
 
     const openPayBillsDialog = async (user: User) => {
         setSelectedUser(user);
-        setIsPending(true);
-        const bills = await getPendingBillsForUserAction(user.id);
-        setPendingBills(bills);
-        setIsPending(false);
         setIsPayBillsOpen(true);
+        setIsLoadingBills(true);
+        try {
+            const bills = await getPendingBillsForUserAction(user.id);
+            setPendingBills(bills);
+        } catch (error) {
+            toast({ variant: "destructive", title: "Error", description: "Could not fetch pending bills." });
+            setIsPayBillsOpen(false);
+        } finally {
+            setIsLoadingBills(false);
+        }
     };
 
     const openRecalculateDialog = (user: User) => {
@@ -522,7 +528,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                         </DialogDescription>
                     </DialogHeader>
                     <div className="py-4 max-h-[60vh] overflow-y-auto space-y-2">
-                        {isPending && !payingBillId ? (
+                        {isLoadingBills ? (
                             <div className="flex justify-center items-center p-8">
                                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground"/>
                             </div>
@@ -562,28 +568,21 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 <DialogContent>
                     <DialogHeader>
                         <DialogTitle>Edit User: {selectedUser?.name}</DialogTitle>
-                        <DialogDescription>
-                            Update the user's details here.
-                        </DialogDescription>
                     </DialogHeader>
                     <form ref={editUserFormRef} action={handleUpdateUser}>
                         <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="edit-name" className="text-right">Name</Label>
-                                <Input id="edit-name" name="name" className="col-span-3" defaultValue={selectedUser?.name} required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="edit-email" className="text-right">Email</Label>
-                                <Input id="edit-email" name="email" type="email" className="col-span-3" defaultValue={selectedUser?.email} required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="edit-phone" className="text-right">Phone</Label>
-                                <Input id="edit-phone" name="phone" className="col-span-3" defaultValue={selectedUser?.phone} required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="edit-password" className="text-right">New Password</Label>
-                                <Input id="edit-password" name="password" type="password" className="col-span-3" placeholder="Leave blank to keep unchanged" />
-                            </div>
+                           <div className="grid grid-cols-4 items-center gap-4">
+                               <Label htmlFor="edit-name" className="text-right">Name</Label>
+                               <Input id="edit-name" name="name" className="col-span-3" defaultValue={selectedUser?.name} required />
+                           </div>
+                           <div className="grid grid-cols-4 items-center gap-4">
+                               <Label htmlFor="edit-email" className="text-right">Email</Label>
+                               <Input id="edit-email" name="email" type="email" className="col-span-3" defaultValue={selectedUser?.email} required />
+                           </div>
+                           <div className="grid grid-cols-4 items-center gap-4">
+                               <Label htmlFor="edit-phone" className="text-right">Phone</Label>
+                               <Input id="edit-phone" name="phone" className="col-span-3" defaultValue={selectedUser?.phone} required />
+                           </div>
                         </div>
                         <DialogFooter>
                             <Button type="submit" disabled={isPending}>
