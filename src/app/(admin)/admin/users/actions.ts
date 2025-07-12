@@ -351,18 +351,24 @@ export async function markBillAsPaidAction(userId: string, billId: string, billA
     const billRef = adminDb.collection('bills').doc(billId);
 
     try {
+        // FIX: Fetch billDoc outside the transaction to access its data for the notes.
+        const billDoc = await billRef.get();
+        if (!billDoc.exists) throw new Error('Bill not found');
+
         await adminDb.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
             if (!userDoc.exists) throw new Error('User not found');
             const userData = userDoc.data()!;
             const newTotalPaid = (userData.totalPaid || 0) + billAmount;
             const newPending = Math.max(0, (userData.pending || 0) - billAmount);
+            
             transaction.update(userRef, {
                 totalPaid: newTotalPaid,
                 pending: newPending,
                 status: newPending <= 0 ? 'paid' : 'pending'
             });
             transaction.update(billRef, { status: 'paid' });
+
             const paymentRef = adminDb.collection('payments').doc();
             transaction.set(paymentRef, {
                 userId, amount: billAmount, date: new Date(),
