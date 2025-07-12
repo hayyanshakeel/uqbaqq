@@ -7,8 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, HeartCrack, Send, SplitSquareHorizontal } from "lucide-react";
-import { Badge } from '@/components/ui/badge';
+import { PlusCircle, Download, Search, MoreHorizontal, Trash2, CreditCard, CalendarPlus, Loader2, Undo2, Edit, History, HeartCrack, Send, SplitSquareHorizontal, RefreshCw } from "lucide-react";
+import { Badge } from "@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import type { User } from '@/lib/data-service';
@@ -20,7 +20,7 @@ import {
     reverseLastPaymentAction, 
     reverseLastBillAction, 
     updateUserAction, 
-    recordBulkPaymentAction, 
+    recalculateBalanceUntilDateAction, 
     markAsDeceasedAction, 
     sendPaymentLinkAction,
     getPendingMonthsForUser,
@@ -39,7 +39,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const [isEditUserOpen, setIsEditUserOpen] = useState(false);
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
-    const [isBulkRecordOpen, setIsBulkRecordOpen] = useState(false);
+    const [isRecalculateOpen, setIsRecalculateOpen] = useState(false);
     const [isAddMissedBillOpen, setIsAddMissedBillOpen] = useState(false);
     const [isSplitBillOpen, setIsSplitBillOpen] = useState(false);
     const [isMarkAsDeceasedOpen, setIsMarkAsDeceasedOpen] = useState(false);
@@ -53,7 +53,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
     const addUserFormRef = useRef<HTMLFormElement>(null);
     const editUserFormRef = useRef<HTMLFormElement>(null);
     const recordPaymentFormRef = useRef<HTMLFormElement>(null);
-    const bulkRecordFormRef = useRef<HTMLFormElement>(null);
+    const recalculateFormRef = useRef<HTMLFormElement>(null);
     const addMissedBillFormRef = useRef<HTMLFormElement>(null);
     const splitBillFormRef = useRef<HTMLFormElement>(null);
     const deceasedFormRef = useRef<HTMLFormElement>(null);
@@ -97,17 +97,22 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         });
     };
 
-    const handleBulkRecord = async (formData: FormData) => {
+    const handleRecalculateBalance = async (formData: FormData) => {
         if (!selectedUser) return;
-        startTransition(async () => {
-            const result = await recordBulkPaymentAction(selectedUser.id, formData);
-            if (result.success) {
-                toast({ title: "Bulk Record Successful", description: result.message });
-                setIsBulkRecordOpen(false);
-            } else {
-                toast({ variant: "destructive", title: "Error", description: result.message });
-            }
+        setConfirmAction({
+            title: `Recalculate Balance for ${selectedUser.name}?`,
+            description: "This will ERASE all previous payment and bill history for this user and create a new consolidated payment record. It will then generate new bills for any outstanding months. This action is irreversible.",
+            action: () => startTransition(async () => {
+                const result = await recalculateBalanceUntilDateAction(selectedUser.id, formData);
+                if (result.success) {
+                    toast({ title: "Balance Recalculated", description: result.message });
+                    setIsRecalculateOpen(false);
+                } else {
+                    toast({ variant: "destructive", title: "Error", description: result.message });
+                }
+            })
         });
+        setIsConfirmOpen(true);
     };
 
     const handleMarkAsDeceased = async (formData: FormData) => {
@@ -220,7 +225,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
 
     const handleExportData = async () => {
         setIsExporting(true);
-        const headers = ['name', 'email', 'phone', 'status', 'joined', 'totalPaid', 'pending', 'pendingMonths'];
+        const headers = ['name', 'email', 'phone', 'status', 'joined', 'lastPaidOn', 'totalPaid', 'pending', 'pendingMonths'];
         const csvRows = [headers.join(",")];
         
         for (const user of filteredUsers) {
@@ -231,6 +236,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 user.phone || '',
                 user.status,
                 user.joined,
+                user.lastPaidOn || 'N/A',
                 user.totalPaid.toFixed(2),
                 user.pending.toFixed(2),
                 `"${pendingMonths}"`
@@ -263,9 +269,9 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setIsRecordPaymentOpen(true);
     };
 
-    const openBulkRecordDialog = (user: User) => {
+    const openRecalculateDialog = (user: User) => {
         setSelectedUser(user);
-        setIsBulkRecordOpen(true);
+        setIsRecalculateOpen(true);
     };
 
     const openAddMissedBillDialog = (user: User) => {
@@ -296,6 +302,10 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     <Send className="mr-2 h-4 w-4" />
                     <span>Send Payment Link</span>
                 </DropdownMenuItem>
+                 <DropdownMenuItem onSelect={() => openRecalculateDialog(user)}>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    <span>Recalculate Balance</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openEditUserDialog(user)}>
                     <Edit className="mr-2 h-4 w-4" />
                     <span>Edit User</span>
@@ -303,10 +313,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 <DropdownMenuItem onSelect={() => openRecordPaymentDialog(user)}>
                     <CreditCard className="mr-2 h-4 w-4" />
                     <span>Record Single Payment</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openBulkRecordDialog(user)}>
-                    <History className="mr-2 h-4 w-4" />
-                    <span>Bulk Record Past Payments</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openAddMissedBillDialog(user)}>
                     <CalendarPlus className="mr-2 h-4 w-4" />
@@ -411,10 +417,8 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                 <TableHeader>
                                     <TableRow>
                                         <TableHead>Name</TableHead>
-                                        <TableHead>Email</TableHead>
                                         <TableHead>Status</TableHead>
-                                        <TableHead>Phone</TableHead>
-                                        <TableHead>Joined</TableHead>
+                                        <TableHead>Last Paid</TableHead>
                                         <TableHead className="text-right">Total Paid</TableHead>
                                         <TableHead className="text-right">Pending</TableHead>
                                         <TableHead className="text-right">Actions</TableHead>
@@ -423,15 +427,13 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                 <TableBody>
                                     {filteredUsers.map((user) => (
                                         <TableRow key={user.id}>
-                                            <TableCell className="font-medium">{user.name}</TableCell>
-                                            <TableCell>{user.email}</TableCell>
+                                            <TableCell className="font-medium">{user.name}<br/><span className="text-xs text-muted-foreground">{user.email}</span></TableCell>
                                             <TableCell>
                                                 <Badge variant={user.status === 'paid' ? 'default' : user.status === 'deceased' ? 'destructive' : 'secondary'}>
                                                     {user.status}
                                                 </Badge>
                                             </TableCell>
-                                            <TableCell>{user.phone}</TableCell>
-                                            <TableCell>{user.joined}</TableCell>
+                                            <TableCell>{user.lastPaidOn}</TableCell>
                                             <TableCell className="text-right">₹{user.totalPaid.toFixed(2)}</TableCell>
                                             <TableCell className="text-right text-destructive font-semibold">₹{user.pending.toFixed(2)}</TableCell>
                                             <TableCell className="text-right">
@@ -467,12 +469,8 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                             </Badge>
                                         </div>
                                         <div className="flex justify-between items-center text-sm">
-                                            <span className="text-muted-foreground">Phone</span>
-                                            <span>{user.phone}</span>
-                                        </div>
-                                        <div className="flex justify-between items-center text-sm">
-                                            <span className="text-muted-foreground">Joined</span>
-                                            <span>{user.joined}</span>
+                                            <span className="text-muted-foreground">Last Paid</span>
+                                            <span>{user.lastPaidOn}</span>
                                         </div>
                                          <div className="flex justify-between items-center text-sm">
                                             <span className="text-muted-foreground">Total Paid</span>
@@ -566,29 +564,26 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 </DialogContent>
             </Dialog>
 
-            <Dialog open={isBulkRecordOpen} onOpenChange={setIsBulkRecordOpen}>
+            <Dialog open={isRecalculateOpen} onOpenChange={setIsRecalculateOpen}>
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>Bulk Record for {selectedUser?.name}</DialogTitle>
+                        <DialogTitle>Recalculate Balance for {selectedUser?.name}</DialogTitle>
                         <DialogDescription>
-                            Select the date range for which the user's payments are clear. The system will calculate the total paid and pending amounts automatically.
+                            Select the month up to which the user's payments are clear. All history will be replaced with a single payment record up to this date, and a new pending balance will be calculated.
                         </DialogDescription>
                     </DialogHeader>
-                    <form ref={bulkRecordFormRef} action={handleBulkRecord}>
+                    <form ref={recalculateFormRef} action={handleRecalculateBalance}>
+                        <Input type="hidden" name="userId" value={selectedUser?.id || ''} />
                         <div className="grid gap-4 py-4">
                             <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="fromMonth" className="text-right">Paid From</Label>
-                                <Input id="fromMonth" name="fromMonth" type="month" className="col-span-3" required />
-                            </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="toMonth" className="text-right">Paid To</Label>
-                                <Input id="toMonth" name="toMonth" type="month" className="col-span-3" required />
+                                <Label htmlFor="untilMonth" className="text-right">Paid Until Month</Label>
+                                <Input id="untilMonth" name="untilMonth" type="month" className="col-span-3" required />
                             </div>
                         </div>
                         <DialogFooter>
                             <Button type="submit" disabled={isPending}>
                                 {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                Calculate & Save
+                                Recalculate Balance
                             </Button>
                         </DialogFooter>
                     </form>
