@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -47,7 +47,8 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setFilteredUsers(initialUsers);
     }, [initialUsers]);
 
-    const handleAction = (action: Function, ...args: any) => {
+    // Generic handler for server actions
+    const handleAction = (action: (...args: any[]) => Promise<any>, ...args: any[]) => {
         startTransition(async () => {
             const result = await action(...args);
             if (result.success) {
@@ -58,12 +59,6 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 toast({ variant: 'destructive', title: 'Error', description: result.message });
             }
         });
-    };
-    
-    const handleFormAction = (e: React.FormEvent<HTMLFormElement>, action: Function, ...args: any) => {
-        e.preventDefault();
-        const formData = new FormData(e.currentTarget);
-        handleAction(() => action(...args, formData));
     };
 
     const openDialog = (dialog: keyof typeof dialogs, user?: User) => {
@@ -84,8 +79,8 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         setIsLoading(false);
     };
 
-    const confirmActionWrapper = (title: string, description: string, action: Function, ...args: any) => {
-        setConfirmAction({ title, description, action: () => handleAction(action, ...args) });
+    const confirmActionWrapper = (title: string, description: string, actionCallback: () => void) => {
+        setConfirmAction({ title, description, action: actionCallback });
         setIsConfirmOpen(true);
     };
     
@@ -93,18 +88,14 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
         <>
             <main className="flex-1 space-y-4 p-4 md:p-8 pt-6">
                  <div className="flex items-center justify-between">
-                    <div>
-                        <h2 className="text-3xl font-bold font-headline tracking-tight">User Management</h2>
-                    </div>
+                    <div><h2 className="text-3xl font-bold font-headline tracking-tight">User Management</h2></div>
                     <Button onClick={() => openDialog('add')}><PlusCircle className="mr-2 h-4 w-4" /> Add User</Button>
                 </div>
                 <Card>
-                    <CardHeader>
-                        <Input placeholder="Search users..." onChange={(e) => setFilteredUsers(initialUsers.filter(u => u.name.toLowerCase().includes(e.target.value.toLowerCase())))} />
-                    </CardHeader>
+                    <CardHeader><Input placeholder="Search users..." onChange={(e) => setFilteredUsers(initialUsers.filter(u => u.name.toLowerCase().includes(e.target.value.toLowerCase())))} /></CardHeader>
                     <CardContent>
                         <Table>
-                             <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Status</TableHead><TableHead>Joined</TableHead><TableHead>Last Paid</TableHead><TableHead className="text-right">Pending</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                            <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Status</TableHead><TableHead>Joined</TableHead><TableHead>Last Paid</TableHead><TableHead className="text-right">Pending</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                             <TableBody>
                                 {filteredUsers.map((user) => (
                                     <TableRow key={user.id}>
@@ -123,9 +114,9 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                                                     <DropdownMenuItem onSelect={() => openDialog('edit', user)}><Edit className="mr-2 h-4 w-4"/>Edit User</DropdownMenuItem>
                                                     <DropdownMenuItem onSelect={() => handleAction(sendPaymentLinkAction, user.id)}><Send className="mr-2 h-4 w-4"/>Send Payment Link</DropdownMenuItem>
                                                     <DropdownMenuSeparator />
-                                                    <DropdownMenuItem onSelect={() => confirmActionWrapper('Reverse Last Payment?', 'This action cannot be undone.', () => reverseLastPaymentAction(user.id))} className="text-amber-600 focus:text-amber-600"><Undo2 className="mr-2 h-4 w-4"/>Reverse Payment</DropdownMenuItem>
+                                                    <DropdownMenuItem onSelect={() => confirmActionWrapper('Reverse Last Payment?', 'This action cannot be undone.', () => handleAction(reverseLastPaymentAction, user.id))} className="text-amber-600 focus:text-amber-600"><Undo2 className="mr-2 h-4 w-4"/>Reverse Payment</DropdownMenuItem>
                                                     <DropdownMenuItem onSelect={() => openDialog('deceased', user)} className="text-destructive focus:text-destructive"><HeartCrack className="mr-2 h-4 w-4"/>Mark as Deceased</DropdownMenuItem>
-                                                    <DropdownMenuItem onSelect={() => confirmActionWrapper(`Delete ${user.name}?`, 'This will permanently delete the user and all their data.', () => deleteUserAction(user.id))} className="text-destructive focus:text-destructive"><Trash2 className="mr-2 h-4 w-4"/>Delete User</DropdownMenuItem>
+                                                    <DropdownMenuItem onSelect={() => confirmActionWrapper(`Delete ${user.name}?`, 'This will permanently delete all user data.', () => handleAction(deleteUserAction, user.id))} className="text-destructive focus:text-destructive"><Trash2 className="mr-2 h-4 w-4"/>Delete User</DropdownMenuItem>
                                                 </DropdownMenuContent>
                                             </DropdownMenu>
                                         </TableCell>
@@ -137,24 +128,27 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                 </Card>
             </main>
 
-            <Dialog open={dialogs.payBills} onOpenChange={(open) => setDialogs(p => ({...p, payBills: open}))}><DialogContent><DialogHeader><DialogTitle>Pay Bills for {selectedUser?.name}</DialogTitle></DialogHeader>
-                <div className="space-y-2 max-h-[60vh] overflow-y-auto p-4">
-                    {isLoading ? <Loader2 className="animate-spin mx-auto"/> :
-                        pendingBills.length > 0 ? pendingBills.map(bill => (
-                            <div key={bill.id} className="flex items-center justify-between border p-2 rounded-md">
-                                <span>{bill.notes} ({bill.date})</span>
-                                <div className="flex items-center gap-2">
-                                    <Badge variant="destructive">₹{bill.amount}</Badge>
-                                    <Button size="sm" onClick={() => handleAction(markBillAsPaidAction, selectedUser!.id, bill.id, bill.amount)} disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Mark Paid"}</Button>
+            {/* Dialogs */}
+            <Dialog open={dialogs.payBills} onOpenChange={(open) => setDialogs(p => ({...p, payBills: open}))}>
+                <DialogContent><DialogHeader><DialogTitle>Pay Bills for {selectedUser?.name}</DialogTitle></DialogHeader>
+                    <div className="space-y-2 max-h-[60vh] overflow-y-auto p-4">
+                        {isLoading ? <Loader2 className="animate-spin mx-auto"/> :
+                            pendingBills.length > 0 ? pendingBills.map(bill => (
+                                <div key={bill.id} className="flex items-center justify-between border p-2 rounded-md">
+                                    <span>{bill.notes} ({bill.date})</span>
+                                    <div className="flex items-center gap-2">
+                                        <Badge variant="destructive">₹{bill.amount}</Badge>
+                                        <Button size="sm" onClick={() => handleAction(markBillAsPaidAction, selectedUser!.id, bill.id, bill.amount)} disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Mark Paid"}</Button>
+                                    </div>
                                 </div>
-                            </div>
-                        )) : <p>No pending bills.</p>}
-                </div>
-            </DialogContent></Dialog>
+                            )) : <p>No pending bills.</p>}
+                    </div>
+                </DialogContent>
+            </Dialog>
+
             <Dialog open={dialogs.add} onOpenChange={(open) => setDialogs(p => ({...p, add: open}))}>
-                <DialogContent>
-                    <DialogHeader><DialogTitle>Add New User</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleFormAction(e, addUserAction)} className="space-y-4 pt-4">
+                <DialogContent><DialogHeader><DialogTitle>Add New User</DialogTitle></DialogHeader>
+                    <form onSubmit={(e) => { e.preventDefault(); handleAction(addUserAction, new FormData(e.currentTarget)); }} className="grid gap-4 py-4">
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-name" className="text-right">Name</Label><Input id="add-name" name="name" required className="col-span-3"/></div>
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-phone" className="text-right">Phone</Label><Input id="add-phone" name="phone" required className="col-span-3"/></div>
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-email" className="text-right">Email</Label><Input id="add-email" name="email" type="email" required className="col-span-3"/></div>
@@ -164,10 +158,10 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     </form>
                 </DialogContent>
             </Dialog>
+
             <Dialog open={dialogs.edit} onOpenChange={(open) => setDialogs(p => ({...p, edit: open}))}>
-                <DialogContent>
-                    <DialogHeader><DialogTitle>Edit User</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleFormAction(e, updateUserAction, selectedUser?.id)} className="space-y-4 pt-4">
+                <DialogContent><DialogHeader><DialogTitle>Edit User</DialogTitle></DialogHeader>
+                    <form onSubmit={(e) => { e.preventDefault(); handleAction(updateUserAction, selectedUser?.id, new FormData(e.currentTarget)); }} className="grid gap-4 py-4">
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="edit-name" className="text-right">Name</Label><Input id="edit-name" name="name" defaultValue={selectedUser?.name} className="col-span-3"/></div>
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="edit-email" className="text-right">Email</Label><Input id="edit-email" name="email" type="email" defaultValue={selectedUser?.email} className="col-span-3"/></div>
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="edit-phone" className="text-right">Phone</Label><Input id="edit-phone" name="phone" defaultValue={selectedUser?.phone} className="col-span-3"/></div>
@@ -176,19 +170,21 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     </form>
                 </DialogContent>
             </Dialog>
+
             <Dialog open={dialogs.recalculate} onOpenChange={(open) => setDialogs(p => ({...p, recalculate: open}))}>
                 <DialogContent>
                     <DialogHeader><DialogTitle>Recalculate Balance</DialogTitle><DialogDescription>Select the month up to which the user is fully paid. This will reset their history and recalculate everything.</DialogDescription></DialogHeader>
-                    <form onSubmit={(e) => handleFormAction(e, recalculateBalanceUntilDateAction, selectedUser?.id)} className="space-y-4 pt-4">
+                    <form onSubmit={(e) => { e.preventDefault(); handleAction(recalculateBalanceUntilDateAction, selectedUser?.id, new FormData(e.currentTarget)); }} className="grid gap-4 py-4">
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="untilMonth" className="text-right">Paid Until Month</Label><Input id="untilMonth" name="untilMonth" type="month" required className="col-span-3"/></div>
                         <DialogFooter><Button type="submit" disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Recalculate"}</Button></DialogFooter>
                     </form>
                 </DialogContent>
             </Dialog>
+
             <Dialog open={dialogs.deceased} onOpenChange={(open) => setDialogs(p => ({...p, deceased: open}))}>
                 <DialogContent>
                     <DialogHeader><DialogTitle>Mark as Deceased</DialogTitle></DialogHeader>
-                    <form onSubmit={(e) => handleFormAction(e, markAsDeceasedAction, selectedUser?.id)} className="space-y-4 pt-4">
+                    <form onSubmit={(e) => { e.preventDefault(); handleAction(markAsDeceasedAction, selectedUser?.id, new FormData(e.currentTarget)); }} className="grid gap-4 py-4">
                         <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="dateOfDeath" className="text-right">Date of Death</Label><Input id="dateOfDeath" name="dateOfDeath" type="date" required className="col-span-3"/></div>
                         <DialogFooter><Button variant="destructive" type="submit" disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Confirm"}</Button></DialogFooter>
                     </form>
@@ -198,7 +194,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
             <AlertDialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
                  <AlertDialogContent>
                     <AlertDialogHeader><AlertDialogTitle>{confirmAction?.title}</AlertDialogTitle><AlertDialogDescription>{confirmAction?.description}</AlertDialogDescription></AlertDialogHeader>
-                    <AlertDialogFooter><AlertDialogCancel onClick={() => setIsConfirmOpen(false)}>Cancel</AlertDialogCancel><AlertDialogAction onClick={confirmAction?.action} disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Continue"}</AlertDialogAction></AlertDialogFooter>
+                    <AlertDialogFooter><AlertDialogCancel onClick={() => setIsConfirmOpen(false)}>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => {confirmAction?.action(); setIsConfirmOpen(false);}} disabled={isPending}>{isPending ? <Loader2 className="animate-spin"/> : "Continue"}</AlertDialogAction></AlertDialogFooter>
                  </AlertDialogContent>
             </AlertDialog>
         </>
