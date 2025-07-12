@@ -361,16 +361,16 @@ export async function recordPaymentAction(formData: FormData) {
 
     try {
         const userRef = adminDb.collection('users').doc(userId);
-        // Get pending bills and sort them by due date to pay off the oldest ones first
-        const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending').orderBy('dueDate', 'asc');
-        
-        const pendingBillsSnapshot = await pendingBillsQuery.get();
-        let remainingAmountToApply = amount;
 
         await adminDb.runTransaction(async (transaction) => {
+            // --- READS FIRST ---
             const userDoc = await transaction.get(userRef);
             if (!userDoc.exists) throw new Error('User not found!');
             
+            const pendingBillsQuery = adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending').orderBy('dueDate', 'asc');
+            const pendingBillsSnapshot = await transaction.get(pendingBillsQuery);
+
+            // --- WRITES AFTER ---
             const userData = userDoc.data()!;
             const newTotalPaid = (userData.totalPaid || 0) + amount;
             const newPending = (userData.pending || 0) - amount;
@@ -382,6 +382,7 @@ export async function recordPaymentAction(formData: FormData) {
             });
 
             // Mark oldest bills as paid
+            let remainingAmountToApply = amount;
             for (const doc of pendingBillsSnapshot.docs) {
                 if (remainingAmountToApply > 0) {
                     const billAmount = doc.data().amount;
