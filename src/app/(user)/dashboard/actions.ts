@@ -17,18 +17,16 @@ export interface PaymentHistoryItem {
     date: string;
     notes: string;
     razorpay_payment_id?: string;
+    receipt_url?: string;
 }
 
 export async function getUserDashboardData(userId: string): Promise<{user: UserDashboardData, paymentHistory: PaymentHistoryItem[], pendingBills: Bill[]} | null> {
-    if (!userId) {
-        console.error("getUserDashboardData called with no userId.");
-        return null;
-    }
+    if (!userId) return null;
     const adminDb = getAdminDb();
 
     try {
         const userRef = adminDb.collection('users').doc(userId);
-        const paymentsRef = adminDb.collection('payments').where('userId', '==', userId);
+        const paymentsRef = adminDb.collection('payments').where('userId', '==', userId).orderBy('date', 'desc');
 
         const [userDoc, paymentsSnapshot, pendingBills] = await Promise.all([
             userRef.get(),
@@ -36,10 +34,7 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
             getPendingBillsForUser(userId)
         ]);
 
-        if (!userDoc.exists) {
-            console.error(`Firestore document not found for user with Auth UID: ${userId}`);
-            return null;
-        }
+        if (!userDoc.exists) return null;
 
         const userData = userDoc.data()!;
         const user: UserDashboardData = {
@@ -48,181 +43,54 @@ export async function getUserDashboardData(userId: string): Promise<{user: UserD
             pending: userData.pending || 0,
         };
         
-        if (user.pending > 0 && pendingBills.length === 0) {
-            pendingBills.push({
-                id: 'outstanding-total',
-                amount: user.pending,
-                date: 'As of today',
-                notes: 'Total Outstanding Dues'
-            });
-        }
-
-        const unsortedPayments = paymentsSnapshot.docs.map(doc => {
+        const paymentHistory: PaymentHistoryItem[] = paymentsSnapshot.docs.map(doc => {
             const data = doc.data();
-            let paymentDate: Date;
-
-            if (data.date && typeof data.date.toDate === 'function') {
-                paymentDate = data.date.toDate();
-            } else if (data.date && (typeof data.date === 'string' || typeof data.date === 'number')) {
-                paymentDate = new Date(data.date);
-            } else {
-                paymentDate = new Date();
-            }
-
-            if (isNaN(paymentDate.getTime())) {
-                paymentDate = new Date();
-            }
-
+            const paymentDate = data.date?.toDate ? data.date.toDate() : new Date();
             return {
                 id: doc.id,
                 amount: data.amount || 0,
-                date: paymentDate,
+                date: format(paymentDate, 'dd/MM/yyyy'),
                 notes: data.notes || '',
-                razorpay_payment_id: data.razorpay_payment_id || null, 
-            };
-        });
-
-        const sortedPayments = unsortedPayments.sort((a, b) => b.date.getTime() - a.date.getTime());
-
-        const paymentHistory: PaymentHistoryItem[] = sortedPayments.map(payment => {
-            const dateString = format(payment.date, 'dd/MM/yyyy');
-            return {
-                id: payment.id,
-                amount: payment.amount,
-                date: dateString,
-                notes: payment.notes || `Payment on ${dateString}`,
-                razorpay_payment_id: payment.razorpay_payment_id,
+                razorpay_payment_id: data.razorpay_payment_id || null,
+                receipt_url: data.receipt_url || null,
             };
         });
 
         return { user, paymentHistory, pendingBills };
 
     } catch (error) {
-        console.error("A critical error occurred while fetching user dashboard data for UID:", userId, error);
-        throw new Error("Could not fetch user data due to a server error.");
+        console.error("Error fetching user dashboard data:", error);
+        throw new Error("Could not fetch user data.");
     }
 }
 
 async function createRazorpayLink(options: any) {
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-        console.error('Razorpay API keys are not configured.');
-        return { success: false, message: 'Payment processing is currently unavailable. Check server configuration.' };
+        return { success: false, message: 'Payment processing is unavailable.' };
     }
-
-    const instance = new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET,
-    });
-    
+    const instance = new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
     const paymentLink = await instance.paymentLink.create(options);
     return { success: true, url: paymentLink.short_url };
 }
 
 export async function createPaymentLink(userId: string) {
-    try {
-        const adminDb = getAdminDb();
-        const userDoc = await adminDb.collection('users').doc(userId).get();
-        if (!userDoc.exists) {
-             return { success: false, message: 'User not found.' };
-        }
-        
-        const userData = userDoc.data()!;
-        const pendingAmount = userData.pending || 0;
-        if (pendingAmount <= 0) return { success: false, message: 'You have no pending amount to pay.' };
+    const adminDb = getAdminDb();
+    const userDoc = await adminDb.collection('users').doc(userId).get();
+    if (!userDoc.exists) return { success: false, message: 'User not found.' };
     
-        const amountInPaisa = Math.round(pendingAmount * 100);
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
-    
-        return createRazorpayLink({
-            amount: amountInPaisa,
-            currency: "INR",
-            accept_partial: false,
-            description: "UQBA COMMITTEE - Total Dues",
-            customer: { name: userData.name, email: userData.email, contact: userData.phone },
-            notify: { sms: true, email: true },
-            reminder_enable: true,
-            notes: { userId: userId, type: 'total_due' },
-            callback_url: `${appUrl}/dashboard`,
-            callback_method: "get"
-        });
-    } catch (error: any) {
-        console.error('Error creating total payment link:', error);
-        return { success: false, message: error.message || 'Could not initiate total payment.' };
-    }
-}
+    const userData = userDoc.data()!;
+    const pendingAmount = userData.pending || 0;
+    if (pendingAmount <= 0) return { success: false, message: 'No pending amount.' };
 
-export async function createPaymentLinkForBill(userId: string, billId: string) {
-    if (billId === 'outstanding-total') {
-        return createPaymentLink(userId);
-    }
-
-    try {
-        const adminDb = getAdminDb();
-
-        const [userDoc, billDoc] = await Promise.all([
-            adminDb.collection('users').doc(userId).get(),
-            adminDb.collection('bills').doc(billId).get()
-        ]);
-    
-        if (!userDoc.exists || !billDoc.exists) {
-            return { success: false, message: 'User or bill not found.' };
-        }
-    
-        const userData = userDoc.data()!;
-        const billData = billDoc.data()!;
-        const billAmount = billData.amount || 0;
-    
-        if (billAmount <= 0) {
-            return { success: false, message: 'This bill has no amount due.' };
-        }
-    
-        const amountInPaisa = Math.round(billAmount * 100);
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:9002';
-    
-        return createRazorpayLink({
-            amount: amountInPaisa,
-            currency: "INR",
-            accept_partial: false,
-            description: billData.notes || `Payment for Bill`,
-            customer: { name: userData.name, email: userData.email, contact: userData.phone },
-            notify: { sms: true, email: true },
-            notes: { userId: userId, billId: billId, type: 'single_bill' },
-            callback_url: `${appUrl}/dashboard`,
-            callback_method: "get"
-        });
-    } catch (error: any) {
-        console.error('Error creating single bill payment link:', error);
-        return { success: false, message: error.message || 'Could not initiate payment for this bill.' };
-    }
-}
-
-// New function to get the receipt URL from Razorpay
-export async function getReceiptUrl(paymentId: string): Promise<{ success: boolean; url?: string; message?: string }> {
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-        return { success: false, message: 'Payment processing is currently unavailable.' };
-    }
-
-    try {
-        const instance = new Razorpay({
-            key_id: process.env.RAZORPAY_KEY_ID,
-            key_secret: process.env.RAZORPAY_KEY_SECRET,
-        });
-
-        // The public receipt URL is available on the payment entity
-        const payment = await instance.payments.fetch(paymentId);
-        
-        // Razorpay often includes the receipt URL in the notes of the payment link
-        if (payment && payment.payment_link_id) {
-            const paymentLink = await instance.paymentLink.fetch(payment.payment_link_id);
-             if (paymentLink && paymentLink.receipt_url) {
-                return { success: true, url: paymentLink.receipt_url };
-            }
-        }
-        
-        return { success: false, message: 'Receipt not available for this payment.' };
-
-    } catch (error: any) {
-        console.error('Error fetching Razorpay receipt:', error);
-        return { success: false, message: 'Could not fetch receipt.' };
-    }
+    return createRazorpayLink({
+        amount: Math.round(pendingAmount * 100),
+        currency: "INR",
+        description: "UQBA Committee - Total Dues",
+        customer: { name: userData.name, email: userData.email, contact: userData.phone },
+        notify: { sms: true, email: true },
+        reminder_enable: true,
+        notes: { userId: userId, type: 'total_due' },
+        callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard`,
+        callback_method: "get"
+    });
 }
