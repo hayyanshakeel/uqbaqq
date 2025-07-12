@@ -1,19 +1,20 @@
 'use client';
 
-import { useState, useTransition, useRef, useEffect } from 'react';
+import { useState, useTransition, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { PlusCircle, Search, MoreHorizontal, Trash2, CreditCard, Loader2, Undo2, Edit, HeartCrack, Send, RefreshCw } from "lucide-react";
+import { PlusCircle, Search, MoreHorizontal, Trash2, CreditCard, Loader2, Undo2, Edit, HeartCrack, Send, RefreshCw, FilePlus, FileMinus } from "lucide-react";
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import type { User, Bill } from '@/lib/data-service';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { Textarea } from '@/components/ui/textarea';
 
 // Define the type for all actions passed as props
 type UserActions = {
@@ -24,6 +25,8 @@ type UserActions = {
     sendPaymentLinkAction: (userId: string) => Promise<{ success: boolean; message: string; }>;
     reverseLastPaymentAction: (userId: string) => Promise<{ success: boolean; message: string; }>;
     recalculateBalanceUntilDateAction: (userId: string, formData: FormData) => Promise<{ success: boolean; message: string; }>;
+    addSinglePaymentAction: (userId: string, formData: FormData) => Promise<{ success: boolean; message: string; }>;
+    addMissedBillAction: (userId: string, formData: FormData) => Promise<{ success: boolean; message: string; }>;
     getPendingBillsForUserAction: (userId: string) => Promise<Bill[]>;
     markBillAsPaidAction: (userId: string, billId: string, billAmount: number) => Promise<{ success: boolean; message: string; }>;
 };
@@ -36,7 +39,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
     const [filteredUsers, setFilteredUsers] = useState(initialUsers);
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [pendingBills, setPendingBills] = useState<Bill[]>([]);
-    const [dialogs, setDialogs] = useState({ add: false, edit: false, recalculate: false, deceased: false, payBills: false });
+    const [dialogs, setDialogs] = useState({ add: false, edit: false, recalculate: false, deceased: false, payBills: false, addPayment: false, addMissedBill: false });
     const [isLoading, setIsLoading] = useState(false);
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{ action: () => void, title: string, description: string } | null>(null);
@@ -62,21 +65,10 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
         });
     };
 
-    // FIX: Updated the form submission handler to properly await the server action
-    // and provide feedback to the user via toasts.
     const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>, action: (formData: FormData) => Promise<{ success: boolean; message: string; }>) => {
         e.preventDefault();
         const formData = new FormData(e.currentTarget);
-        startTransition(async () => {
-            const result = await action(formData);
-            if (result.success) {
-                toast({ title: 'Success', description: result.message });
-                closeAllDialogs();
-                router.refresh();
-            } else {
-                toast({ variant: 'destructive', title: 'Error', description: result.message });
-            }
-        });
+        handleAction(() => action(formData));
     };
 
     const openDialog = (dialog: keyof typeof dialogs, user?: User) => {
@@ -85,7 +77,7 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
     };
 
     const closeAllDialogs = () => {
-        setDialogs({ add: false, edit: false, recalculate: false, deceased: false, payBills: false });
+        setDialogs({ add: false, edit: false, recalculate: false, deceased: false, payBills: false, addPayment: false, addMissedBill: false });
     };
 
     const openPayBillsDialog = async (user: User) => {
@@ -126,6 +118,8 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal /></Button></DropdownMenuTrigger>
                                                 <DropdownMenuContent align="end">
+                                                    <DropdownMenuItem onSelect={() => openDialog('addPayment', user)}><FilePlus className="mr-2 h-4 w-4"/>Add Single Payment</DropdownMenuItem>
+                                                    <DropdownMenuItem onSelect={() => openDialog('addMissedBill', user)}><FileMinus className="mr-2 h-4 w-4"/>Add Missed Bill</DropdownMenuItem>
                                                     <DropdownMenuItem onSelect={() => openPayBillsDialog(user)}><CreditCard className="mr-2 h-4 w-4"/>Pay Bills</DropdownMenuItem>
                                                     <DropdownMenuItem onSelect={() => openDialog('recalculate', user)}><RefreshCw className="mr-2 h-4 w-4"/>Bulk Record / Recalculate</DropdownMenuItem>
                                                     <DropdownMenuSeparator />
@@ -147,6 +141,30 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
             </main>
 
             {/* ALL DIALOGS */}
+            <Dialog open={dialogs.addPayment} onOpenChange={(open) => !open && closeAllDialogs()}>
+                <DialogContent>
+                    <DialogHeader><DialogTitle>Add Single Payment for {selectedUser?.name}</DialogTitle></DialogHeader>
+                    <form onSubmit={(e) => handleFormSubmit(e, (fd) => actions.addSinglePaymentAction(selectedUser!.id, fd))} className="space-y-4 pt-4">
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="amount" className="text-right">Amount</Label><Input id="amount" name="amount" type="number" step="0.01" className="col-span-3" required /></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="date" className="text-right">Date</Label><Input id="date" name="date" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="col-span-3" required /></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="notes" className="text-right">Notes</Label><Textarea id="notes" name="notes" placeholder="Optional notes..." className="col-span-3" /></div>
+                        <DialogFooter><Button type="submit" disabled={isPending}>{isPending ? <Loader2 className="animate-spin" /> : "Record Payment"}</Button></DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={dialogs.addMissedBill} onOpenChange={(open) => !open && closeAllDialogs()}>
+                <DialogContent>
+                    <DialogHeader><DialogTitle>Add Missed Bill for {selectedUser?.name}</DialogTitle></DialogHeader>
+                    <form onSubmit={(e) => handleFormSubmit(e, (fd) => actions.addMissedBillAction(selectedUser!.id, fd))} className="space-y-4 pt-4">
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="amount" className="text-right">Amount</Label><Input id="amount" name="amount" type="number" step="0.01" className="col-span-3" required /></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="date" className="text-right">Bill Date</Label><Input id="date" name="date" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="col-span-3" required /></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="notes" className="text-right">Notes</Label><Textarea id="notes" name="notes" placeholder="e.g., Monthly bill for January 2024" className="col-span-3" required /></div>
+                        <DialogFooter><Button type="submit" disabled={isPending}>{isPending ? <Loader2 className="animate-spin" /> : "Add Bill"}</Button></DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+            
             <Dialog open={dialogs.payBills} onOpenChange={(open) => !open && closeAllDialogs()}>
                 <DialogContent><DialogHeader><DialogTitle>Pay Bills for {selectedUser?.name}</DialogTitle></DialogHeader>
                     <div className="space-y-2 max-h-[60vh] overflow-y-auto p-4">
