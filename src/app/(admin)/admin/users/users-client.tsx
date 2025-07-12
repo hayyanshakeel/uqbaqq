@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PlusCircle, Search, MoreHorizontal, Trash2, CreditCard, Loader2, Undo2, Edit, HeartCrack, Send, RefreshCw } from "lucide-react";
 import { Badge } from '@/components/ui/badge';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import type { User, Bill } from '@/lib/data-service';
 import { 
@@ -67,7 +68,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
 
     const openDialog = (dialog: keyof typeof dialogs, user?: User) => {
         if (user) setSelectedUser(user);
-        setDialogs(prev => ({...prev, [dialog]: true}));
+        setDialogs(prev => ({ ...prev, [dialog]: true }));
     };
 
     const closeAllDialogs = () => {
@@ -103,7 +104,7 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     </CardHeader>
                     <CardContent>
                         <Table>
-                            <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Status</TableHead><TableHead>Joined</TableHead><TableHead>Last Paid</TableHead><TableHead className="text-right">Pending</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                             <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Status</TableHead><TableHead>Joined</TableHead><TableHead>Last Paid</TableHead><TableHead className="text-right">Pending</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                             <TableBody>
                                 {filteredUsers.map((user) => (
                                     <TableRow key={user.id}>
@@ -154,10 +155,46 @@ export default function UsersClient({ users: initialUsers }: UsersClientProps) {
                     </div>
                 </DialogContent>
             </Dialog>
-            <Dialog open={dialogs.add} onOpenChange={(open) => setDialogs(p => ({...p, add: open}))}><DialogContent><DialogHeader><DialogTitle>Add New User</DialogTitle></DialogHeader><form onSubmit={(e) => handleFormAction(e, addUserAction)}>{/* Add form fields here */}<DialogFooter><Button type="submit" disabled={isPending}>Save</Button></DialogFooter></form></DialogContent></Dialog>
-            <Dialog open={dialogs.edit} onOpenChange={(open) => setDialogs(p => ({...p, edit: open}))}><DialogContent><DialogHeader><DialogTitle>Edit User</DialogTitle></DialogHeader><form onSubmit={(e) => handleFormAction(e, updateUserAction, selectedUser?.id)}>{/* Add form fields here */}<DialogFooter><Button type="submit" disabled={isPending}>Save</Button></DialogFooter></form></DialogContent></Dialog>
-            <Dialog open={dialogs.recalculate} onOpenChange={(open) => setDialogs(p => ({...p, recalculate: open}))}><DialogContent><DialogHeader><DialogTitle>Recalculate Balance</DialogTitle><DialogDescription>Select the month up to which the user is fully paid. This will reset their history and recalculate everything.</DialogDescription></DialogHeader><form onSubmit={(e) => handleFormAction(e, recalculateBalanceUntilDateAction, selectedUser?.id)}><div className="grid gap-4 py-4"><Label htmlFor="untilMonth">Paid Until Month</Label><Input id="untilMonth" name="untilMonth" type="month" required /></div><DialogFooter><Button type="submit" disabled={isPending}>Recalculate</Button></DialogFooter></form></DialogContent></Dialog>
-            <Dialog open={dialogs.deceased} onOpenChange={(open) => setDialogs(p => ({...p, deceased: open}))}><DialogContent><DialogHeader><DialogTitle>Mark as Deceased</DialogTitle></DialogHeader><form onSubmit={(e) => handleFormAction(e, markAsDeceasedAction, selectedUser?.id)}><div className="grid gap-4 py-4"><Label htmlFor="dateOfDeath">Date of Death</Label><Input id="dateOfDeath" name="dateOfDeath" type="date" required /></div><DialogFooter><Button type="submit" variant="destructive" disabled={isPending}>Confirm</Button></DialogFooter></form></DialogContent></Dialog>
+            <Dialog open={dialogs.add} onOpenChange={(open) => setDialogs(p => ({...p, add: open}))}>
+                <DialogContent><DialogHeader><DialogTitle>Add New User</DialogTitle></DialogHeader>
+                    <form onSubmit={(e) => handleFormAction(e, addUserAction)} className="grid gap-4 py-4">
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-name" className="text-right">Name</Label><Input id="add-name" name="name" required className="col-span-3"/></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-phone" className="text-right">Phone</Label><Input id="add-phone" name="phone" required className="col-span-3"/></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-email" className="text-right">Email</Label><Input id="add-email" name="email" type="email" required className="col-span-3"/></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-password" className="text-right">Password</Label><Input id="add-password" name="password" type="password" required className="col-span-3"/></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="add-joining_date" className="text-right">Joining Date</Label><Input id="add-joining_date" name="joining_date" type="date" required className="col-span-3"/></div>
+                        <DialogFooter><Button type="submit" disabled={isPending}>Save</Button></DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+            <Dialog open={dialogs.edit} onOpenChange={(open) => setDialogs(p => ({...p, edit: open}))}>
+                <DialogContent><DialogHeader><DialogTitle>Edit User</DialogTitle></DialogHeader>
+                    <form onSubmit={(e) => handleFormAction(e, updateUserAction, selectedUser?.id)} className="grid gap-4 py-4">
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="edit-name" className="text-right">Name</Label><Input id="edit-name" name="name" defaultValue={selectedUser?.name} className="col-span-3"/></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="edit-email" className="text-right">Email</Label><Input id="edit-email" name="email" type="email" defaultValue={selectedUser?.email} className="col-span-3"/></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="edit-phone" className="text-right">Phone</Label><Input id="edit-phone" name="phone" defaultValue={selectedUser?.phone} className="col-span-3"/></div>
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="edit-password" className="text-right">New Password</Label><Input id="edit-password" name="password" type="password" placeholder="Leave blank" className="col-span-3"/></div>
+                        <DialogFooter><Button type="submit" disabled={isPending}>Save</Button></DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+            <Dialog open={dialogs.recalculate} onOpenChange={(open) => setDialogs(p => ({...p, recalculate: open}))}>
+                <DialogContent>
+                    <DialogHeader><DialogTitle>Recalculate Balance</DialogTitle><DialogDescription>Select the month up to which the user is fully paid. This will reset their history and recalculate everything.</DialogDescription></DialogHeader>
+                    <form onSubmit={(e) => handleFormAction(e, recalculateBalanceUntilDateAction, selectedUser?.id)} className="grid gap-4 py-4">
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="untilMonth" className="text-right">Paid Until Month</Label><Input id="untilMonth" name="untilMonth" type="month" required className="col-span-3"/></div>
+                        <DialogFooter><Button type="submit" disabled={isPending}>Recalculate</Button></DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+            <Dialog open={dialogs.deceased} onOpenChange={(open) => setDialogs(p => ({...p, deceased: open}))}>
+                <DialogContent><DialogHeader><DialogTitle>Mark as Deceased</DialogTitle></DialogHeader>
+                    <form onSubmit={(e) => handleFormAction(e, markAsDeceasedAction, selectedUser?.id)} className="grid gap-4 py-4">
+                        <div className="grid grid-cols-4 items-center gap-4"><Label htmlFor="dateOfDeath">Date of Death</Label><Input id="dateOfDeath" name="dateOfDeath" type="date" required className="col-span-3"/></div>
+                        <DialogFooter><Button variant="destructive" type="submit" disabled={isPending}>Confirm</Button></DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
 
             <AlertDialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
                  <AlertDialogContent>
