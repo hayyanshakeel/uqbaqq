@@ -62,10 +62,21 @@ export function UsersClient({ initialUsers, ...actions }: UsersClientProps) {
         });
     };
 
-    const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>, action: (formData: FormData) => void) => {
+    // FIX: Updated the form submission handler to properly await the server action
+    // and provide feedback to the user via toasts.
+    const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>, action: (formData: FormData) => Promise<{ success: boolean; message: string; }>) => {
         e.preventDefault();
         const formData = new FormData(e.currentTarget);
-        startTransition(() => action(formData));
+        startTransition(async () => {
+            const result = await action(formData);
+            if (result.success) {
+                toast({ title: 'Success', description: result.message });
+                closeAllDialogs();
+                router.refresh();
+            } else {
+                toast({ variant: 'destructive', title: 'Error', description: result.message });
+            }
+        });
     };
 
     const openDialog = (dialog: keyof typeof dialogs, user?: User) => {
