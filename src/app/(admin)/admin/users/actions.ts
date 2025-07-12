@@ -19,7 +19,6 @@ const feeStructure = [
 ];
 
 function parseDate(dateString: string): Date {
-    // Handles both 'yyyy-MM-dd' and 'yyyy-MM' formats
     const date = parseISO(dateString);
     if (!isValid(date)) throw new Error(`Invalid date encountered: ${dateString}`);
     return date;
@@ -63,6 +62,18 @@ const UserSchema = z.object({
 
 const RecalculateSchema = z.object({
     untilMonth: z.string().min(1, 'A date is required.')
+});
+
+const SinglePaymentSchema = z.object({
+    amount: z.coerce.number().positive('Amount must be positive.'),
+    date: z.string().min(1, 'Date is required.'),
+    notes: z.string().optional(),
+});
+
+const MissedBillSchema = z.object({
+    amount: z.coerce.number().positive('Amount must be positive.'),
+    date: z.string().min(1, 'Date is required.'),
+    notes: z.string().min(1, 'Notes are required.'),
 });
 
 
@@ -153,26 +164,26 @@ export async function recalculateBalanceUntilDateAction(userId: string, formData
     const userRef = adminDb.collection('users').doc(userId);
 
     try {
-        const userDoc = await userRef.get();
-        if (!userDoc.exists) throw new Error('User not found.');
-        
-        const joiningDate = userDoc.data()!.joined;
-        const paidUntilDate = endOfMonth(parseDate(untilMonth)).toISOString();
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error('User not found.');
+            
+            const joiningDate = userDoc.data()!.joined;
+            const paidUntilDate = endOfMonth(parseDate(untilMonth)).toISOString();
 
-        // Calculate dues from joining to the specified 'paid until' date
-        const { totalDues: totalAmountPaid } = calculateDuesForPeriod(joiningDate, paidUntilDate);
+            const { totalDues: totalAmountPaid } = calculateDuesForPeriod(joiningDate, paidUntilDate);
+            const nextMonthAfterPaid = addMonths(parseDate(paidUntilDate), 1).toISOString();
+            const { totalDues: newPendingAmount } = calculateDuesForPeriod(nextMonthAfterPaid, new Date().toISOString());
 
-        // Calculate pending dues from the 'paid until' date to today
-        const nextMonthAfterPaid = addMonths(parseDate(paidUntilDate), 1).toISOString();
-        const { totalDues: newPendingAmount } = calculateDuesForPeriod(nextMonthAfterPaid, new Date().toISOString());
-
-        await userRef.update({
-            totalPaid: totalAmountPaid,
-            pending: newPendingAmount,
-            status: newPendingAmount > 0 ? 'pending' : 'paid'
+            transaction.update(userRef, {
+                totalPaid: totalAmountPaid,
+                pending: newPendingAmount,
+                status: newPendingAmount > 0 ? 'pending' : 'paid'
+            });
         });
 
         revalidatePath('/admin/users');
+        revalidatePath('/dashboard'); // Revalidate user dashboard
         return { success: true, message: `Balance recalculated successfully. User is marked as paid until ${format(parseDate(untilMonth), 'MMMM yyyy')}.` };
 
     } catch (error: any) {
@@ -181,26 +192,138 @@ export async function recalculateBalanceUntilDateAction(userId: string, formData
     }
 }
 
+export async function reverseLastPaymentAction(userId: string) {
+    if (!userId) {
+        return { success: false, message: 'User ID is required.' };
+    }
 
-// --- Other Actions (Stubs for completeness, implement as needed) ---
+    const adminDb = getAdminDb();
+    const userRef = adminDb.collection('users').doc(userId);
+    const paymentsRef = adminDb.collection('payments');
+
+    try {
+        const lastPaymentQuery = paymentsRef.where('userId', '==', userId).orderBy('date', 'desc').limit(1);
+        const lastPaymentSnapshot = await lastPaymentQuery.get();
+
+        if (lastPaymentSnapshot.empty) {
+            return { success: false, message: 'No payments found for this user to reverse.' };
+        }
+
+        const lastPaymentDoc = lastPaymentSnapshot.docs[0];
+        const lastPaymentData = lastPaymentDoc.data();
+        const amountToReverse = lastPaymentData.amount;
+
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error('User not found.');
+            const userData = userDoc.data()!;
+
+            const newTotalPaid = (userData.totalPaid || 0) - amountToReverse;
+            const newPending = (userData.pending || 0) + amountToReverse;
+
+            transaction.update(userRef, {
+                totalPaid: newTotalPaid < 0 ? 0 : newTotalPaid,
+                pending: newPending,
+                status: 'pending'
+            });
+
+            transaction.delete(lastPaymentDoc.ref);
+        });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/admin/dashboard');
+        revalidatePath('/dashboard'); // Revalidate user dashboard
+        return { success: true, message: `Successfully reversed last payment of ₹${amountToReverse}.` };
+
+    } catch (error: any) {
+        console.error('Error reversing payment:', error);
+        return { success: false, message: error.message || 'Failed to reverse payment.' };
+    }
+}
+
+export async function addSinglePaymentAction(userId: string, formData: FormData) {
+    const validatedFields = SinglePaymentSchema.safeParse(Object.fromEntries(formData));
+    if (!validatedFields.success) return { success: false, message: 'Invalid payment data.' };
+    
+    const { amount, date, notes } = validatedFields.data;
+    const adminDb = getAdminDb();
+    const userRef = adminDb.collection('users').doc(userId);
+
+    try {
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error("User not found.");
+            const userData = userDoc.data()!;
+
+            const newTotalPaid = (userData.totalPaid || 0) + amount;
+            const newPending = Math.max(0, (userData.pending || 0) - amount);
+            
+            transaction.update(userRef, {
+                totalPaid: newTotalPaid,
+                pending: newPending,
+                status: newPending > 0 ? 'pending' : 'paid'
+            });
+
+            const paymentRef = adminDb.collection('payments').doc();
+            transaction.set(paymentRef, {
+                userId, amount, date: parseISO(date), notes: notes || 'Manual payment entry',
+                type: 'manual_payment', createdAt: new Date()
+            });
+        });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/dashboard'); // Revalidate user dashboard
+        return { success: true, message: 'Payment recorded successfully.' };
+    } catch (error: any) {
+        return { success: false, message: error.message || 'Failed to record payment.' };
+    }
+}
+
+export async function addMissedBillAction(userId: string, formData: FormData) {
+    const validatedFields = MissedBillSchema.safeParse(Object.fromEntries(formData));
+    if (!validatedFields.success) return { success: false, message: 'Invalid bill data.' };
+
+    const { amount, date, notes } = validatedFields.data;
+    const adminDb = getAdminDb();
+    const userRef = adminDb.collection('users').doc(userId);
+
+    try {
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error("User not found.");
+            const userData = userDoc.data()!;
+
+            const newPending = (userData.pending || 0) + amount;
+            transaction.update(userRef, { pending: newPending, status: 'pending' });
+
+            const billRef = adminDb.collection('bills').doc();
+            transaction.set(billRef, {
+                userId, amount, dueDate: parseISO(date), notes,
+                status: 'pending', createdAt: new Date()
+            });
+        });
+
+        revalidatePath('/admin/users');
+        revalidatePath('/dashboard'); // Revalidate user dashboard
+        return { success: true, message: 'Missed bill added successfully.' };
+    } catch (error: any) {
+        return { success: false, message: error.message || 'Failed to add missed bill.' };
+    }
+}
+
+
+// --- Other Actions ---
 
 export async function updateUserAction(userId: string, formData: FormData) {
-    // ... implementation for updating user details
-    return { success: true, message: 'User updated successfully (Not Implemented).' };
+    return { success: false, message: 'Update user not implemented yet.' };
 }
 
 export async function markAsDeceasedAction(userId: string, formData: FormData) {
-    // ... implementation for marking user as deceased
-    return { success: true, message: 'User marked as deceased (Not Implemented).' };
+    return { success: false, message: 'Mark as deceased not implemented yet.' };
 }
 
 export async function sendPaymentLinkAction(userId: string) {
     return createPaymentLink(userId);
-}
-
-export async function reverseLastPaymentAction(userId: string) {
-    // ... implementation for reversing the last payment
-    return { success: true, message: 'Last payment reversed (Not Implemented).' };
 }
 
 export async function getPendingBillsForUserAction(userId: string): Promise<Bill[]> {
