@@ -9,7 +9,6 @@ import type { Bill } from '@/lib/data-service';
 import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 
 // --- Fee Structure & Calculation Helpers ---
-
 const feeStructure = [
     { start: '2001-05-01', end: '2007-04-30', fee: 30 },
     { start: '2007-05-01', end: '2014-04-30', fee: 50 },
@@ -29,11 +28,8 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): { tot
     const endDate = startOfMonth(parseDate(endDateStr));
     let totalDues = 0;
     const monthlyBreakdown: { month: Date, fee: number }[] = [];
-
     if (isAfter(startDate, endDate)) return { totalDues: 0, monthlyBreakdown: [] };
-
     const totalMonths = differenceInMonths(endDate, startDate) + 1;
-
     for (let i = 0; i < totalMonths; i++) {
         const monthDate = addMonths(startDate, i);
         const applicableTier = feeStructure.find(tier => {
@@ -41,7 +37,6 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): { tot
             const tierEnd = parseDate(tier.end);
             return monthDate >= tierStart && monthDate <= tierEnd;
         });
-
         if (applicableTier) {
             totalDues += applicableTier.fee;
             monthlyBreakdown.push({ month: monthDate, fee: applicableTier.fee });
@@ -50,8 +45,7 @@ function calculateDuesForPeriod(startDateStr: string, endDateStr: string): { tot
     return { totalDues, monthlyBreakdown };
 }
 
-// --- Zod Schemas for Validation ---
-
+// --- Zod Schemas ---
 const UserSchema = z.object({
   name: z.string().min(1, 'Name is required.'),
   email: z.string().email('Invalid email address.'),
@@ -60,181 +54,185 @@ const UserSchema = z.object({
   joining_date: z.string().min(1, 'Joining date is required.'),
 });
 
-const RecalculateSchema = z.object({
-    untilMonth: z.string().min(1, 'A date is required.')
-});
-
 const MissedBillSchema = z.object({
     amount: z.coerce.number().positive('Amount must be positive.'),
     date: z.string().min(1, 'Date is required.'),
     notes: z.string().min(1, 'Notes are required.'),
 });
 
-
 // --- Server Actions ---
 
 export async function addUserAction(formData: FormData) {
-    const rawData = {
-        name: formData.get('name'),
-        email: formData.get('email'),
-        phone: formData.get('phone'),
-        password: formData.get('password'),
-        joining_date: formData.get('joining_date'),
-    };
-
-    const validatedFields = UserSchema.safeParse(rawData);
-
+    const validatedFields = UserSchema.safeParse(Object.fromEntries(formData));
     if (!validatedFields.success) {
         const firstError = Object.values(validatedFields.error.flatten().fieldErrors)[0]?.[0];
         return { success: false, message: firstError || 'Please fill out all fields correctly.' };
     }
-
     const { name, email, phone, password, joining_date } = validatedFields.data;
     const adminDb = getAdminDb();
     const adminAuth = getAdminAuth();
     const formattedPhoneNumber = `+91${phone}`;
-
     try {
-        const userRecord = await adminAuth.createUser({
-            email: email,
-            emailVerified: true,
-            password: password,
-            displayName: name,
-            phoneNumber: formattedPhoneNumber,
-        });
-
+        const userRecord = await adminAuth.createUser({ email, emailVerified: true, password, displayName: name, phoneNumber: formattedPhoneNumber });
         const { totalDues, monthlyBreakdown } = calculateDuesForPeriod(joining_date, new Date().toISOString());
-        
         const batch = adminDb.batch();
-
         const userRef = adminDb.collection('users').doc(userRecord.uid);
-        batch.set(userRef, {
-            name,
-            email,
-            phone: formattedPhoneNumber,
-            joined: joining_date,
-            status: totalDues > 0 ? 'pending' : 'paid',
-            totalPaid: 0,
-            pending: totalDues,
-            createdAt: new Date(),
-        });
-
+        batch.set(userRef, { name, email, phone: formattedPhoneNumber, joined: joining_date, status: totalDues > 0 ? 'pending' : 'paid', totalPaid: 0, pending: totalDues, createdAt: new Date() });
         monthlyBreakdown.forEach(bill => {
             const billRef = adminDb.collection('bills').doc();
-            batch.set(billRef, {
-                userId: userRecord.uid,
-                amount: bill.fee,
-                dueDate: bill.month,
-                notes: `Monthly bill for ${format(bill.month, 'MMMM yyyy')}`,
-                status: 'pending',
-                createdAt: new Date()
-            });
+            batch.set(billRef, { userId: userRecord.uid, amount: bill.fee, dueDate: bill.month, notes: `Monthly bill for ${format(bill.month, 'MMMM yyyy')}`, status: 'pending', createdAt: new Date() });
         });
-
         await batch.commit();
-        
         revalidatePath('/admin/users');
         return { success: true, message: 'User added successfully with all pending dues calculated.' };
-
     } catch (error: any) {
         let message = 'Failed to add user.';
         if (error.code === 'auth/email-already-exists') message = 'A user with this email already exists.';
         else if (error.code === 'auth/invalid-phone-number') message = 'The phone number is invalid.';
         else if (error.message) message = error.message;
-        
         return { success: false, message };
     }
 }
 
-export async function recalculateBalanceUntilDateAction(userId: string, formData: FormData) {
-    const validatedFields = RecalculateSchema.safeParse({ untilMonth: formData.get('untilMonth') });
-
-    if (!validatedFields.success) {
-        return { success: false, message: 'Invalid date provided.' };
+export async function addMissedBillAction(userId: string, formData: FormData) {
+    const validatedFields = MissedBillSchema.safeParse(Object.fromEntries(formData));
+    if (!validatedFields.success) return { success: false, message: 'Invalid bill data.' };
+    const { amount, date, notes } = validatedFields.data;
+    const adminDb = getAdminDb();
+    const userRef = adminDb.collection('users').doc(userId);
+    try {
+        await adminDb.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) throw new Error("User not found.");
+            const userData = userDoc.data()!;
+            const newPending = (userData.pending || 0) + amount;
+            transaction.update(userRef, { pending: newPending, status: 'pending' });
+            const billRef = adminDb.collection('bills').doc();
+            transaction.set(billRef, { userId, amount, dueDate: parseISO(date), notes, status: 'pending', createdAt: new Date() });
+        });
+        revalidatePath('/admin/users');
+        revalidatePath('/dashboard');
+        return { success: true, message: 'Missed bill added successfully.' };
+    } catch (error: any) {
+        return { success: false, message: error.message || 'Failed to add missed bill.' };
     }
-    
-    const { untilMonth } = validatedFields.data;
+}
+
+export async function markMultipleBillsAsPaidAction(userId: string, billIds: string[]) {
+    if (!userId || !billIds || billIds.length === 0) {
+        return { success: false, message: 'No bills selected.' };
+    }
     const adminDb = getAdminDb();
     const userRef = adminDb.collection('users').doc(userId);
 
     try {
         await adminDb.runTransaction(async (transaction) => {
             const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) throw new Error('User not found.');
+            if (!userDoc.exists) throw new Error('User not found');
+            const userData = userDoc.data()!;
+
+            const billRefs = billIds.map(id => adminDb.collection('bills').doc(id));
+            const billDocs = await transaction.getAll(...billRefs);
+
+            let totalAmountPaid = 0;
+            billDocs.forEach(billDoc => {
+                if (billDoc.exists && billDoc.data()!.status === 'pending') {
+                    totalAmountPaid += billDoc.data()!.amount;
+                    transaction.update(billDoc.ref, { status: 'paid' });
+                }
+            });
+
+            if (totalAmountPaid === 0) {
+                throw new Error("Selected bills have already been paid or do not exist.");
+            }
+
+            const newTotalPaid = (userData.totalPaid || 0) + totalAmountPaid;
+            const newPending = Math.max(0, (userData.pending || 0) - totalAmountPaid);
             
-            const joiningDate = userDoc.data()!.joined;
-            const paidUntilDate = endOfMonth(parseDate(untilMonth)).toISOString();
-
-            // Clear existing bills and payments for this user
-            const billsSnapshot = await adminDb.collection('bills').where('userId', '==', userId).get();
-            billsSnapshot.forEach(doc => transaction.delete(doc.ref));
-            const paymentsSnapshot = await adminDb.collection('payments').where('userId', '==', userId).get();
-            paymentsSnapshot.forEach(doc => transaction.delete(doc.ref));
-
-            // Calculate past dues and create payment history
-            const { totalDues: totalAmountPaid, monthlyBreakdown: pastBreakdown } = calculateDuesForPeriod(joiningDate, paidUntilDate);
-            pastBreakdown.forEach(payment => {
-                const paymentRef = adminDb.collection('payments').doc();
-                transaction.set(paymentRef, {
-                    userId,
-                    amount: payment.fee,
-                    date: payment.month,
-                    notes: `Bulk recorded payment for ${format(payment.month, 'MMMM yyyy')}`,
-                    type: 'manual_bulk_record',
-                    createdAt: new Date()
-                });
-            });
-
-            // Calculate pending dues and create new bills
-            const nextMonthAfterPaid = addMonths(parseDate(paidUntilDate), 1).toISOString();
-            const { totalDues: newPendingAmount, monthlyBreakdown: futureBreakdown } = calculateDuesForPeriod(nextMonthAfterPaid, new Date().toISOString());
-            futureBreakdown.forEach(bill => {
-                const billRef = adminDb.collection('bills').doc();
-                transaction.set(billRef, {
-                    userId,
-                    amount: bill.fee,
-                    dueDate: bill.month,
-                    notes: `Monthly bill for ${format(bill.month, 'MMMM yyyy')}`,
-                    status: 'pending',
-                    createdAt: new Date()
-                });
-            });
-
-            // Update the user's main record
             transaction.update(userRef, {
-                totalPaid: totalAmountPaid,
-                pending: newPendingAmount,
-                status: newPendingAmount > 0 ? 'pending' : 'paid'
+                totalPaid: newTotalPaid,
+                pending: newPending,
+                status: newPending <= 0 ? 'paid' : 'pending'
+            });
+
+            const paymentRef = adminDb.collection('payments').doc();
+            transaction.set(paymentRef, {
+                userId,
+                amount: totalAmountPaid,
+                date: new Date(),
+                notes: `Manual payment for ${billIds.length} bill(s).`,
+                type: 'manual_bill_payment',
+                createdAt: new Date()
             });
         });
 
         revalidatePath('/admin/users');
-        revalidatePath('/dashboard'); // Revalidate user dashboard
-        return { success: true, message: `Balance recalculated successfully. User is marked as paid until ${format(parseDate(untilMonth), 'MMMM yyyy')}.` };
-
+        revalidatePath('/dashboard');
+        return { success: true, message: `Successfully paid ${billIds.length} bills.` };
     } catch (error: any) {
-        console.error("Recalculation error:", error);
-        return { success: false, message: error.message || 'Failed to recalculate balance.' };
+        return { success: false, message: error.message || 'Failed to pay bills.' };
     }
+}
+
+// Other actions remain the same...
+export async function deleteUserAction(userId: string) {
+    const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
+    if (!userId) return { success: false, message: 'User ID is required.' };
+    try {
+        const batch = adminDb.batch();
+        const billsQuery = adminDb.collection('bills').where('userId', '==', userId);
+        const paymentsQuery = adminDb.collection('payments').where('userId', '==', userId);
+        const [billsSnapshot, paymentsSnapshot] = await Promise.all([billsQuery.get(), paymentsQuery.get()]);
+        billsSnapshot.forEach(doc => batch.delete(doc.ref));
+        paymentsSnapshot.forEach(doc => batch.delete(doc.ref));
+        batch.delete(adminDb.collection('users').doc(userId));
+        await batch.commit();
+        await adminAuth.deleteUser(userId);
+        revalidatePath('/admin/users');
+        return { success: true, message: 'User deleted successfully.' };
+    } catch (error: any) {
+        if (error.code === 'auth/user-not-found') {
+            revalidatePath('/admin/users');
+            return { success: true, message: 'User already deleted from Auth.'};
+        }
+        return { success: false, message: 'Failed to delete user.' };
+    }
+}
+
+export async function getPendingBillsForUserAction(userId: string): Promise<Bill[]> {
+    if (!userId) return [];
+    const adminDb = getAdminDb();
+    const billsSnapshot = await adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending').orderBy('dueDate', 'asc').get();
+    if (billsSnapshot.empty) return [];
+    return billsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+            id: doc.id,
+            amount: data.amount,
+            date: format(data.dueDate.toDate(), 'dd/MM/yyyy'),
+            notes: data.notes,
+        };
+    });
+}
+
+export async function sendPaymentLinkAction(userId: string) {
+    return createPaymentLink(userId);
 }
 
 export async function reverseLastPaymentAction(userId: string) {
     if (!userId) {
         return { success: false, message: 'User ID is required.' };
     }
-
     const adminDb = getAdminDb();
     const userRef = adminDb.collection('users').doc(userId);
     const paymentsRef = adminDb.collection('payments');
-
     try {
         const lastPaymentQuery = paymentsRef.where('userId', '==', userId).orderBy('date', 'desc').limit(1);
         const lastPaymentSnapshot = await lastPaymentQuery.get();
-
         if (lastPaymentSnapshot.empty) {
             return { success: false, message: 'No payments found for this user to reverse.' };
         }
-
         const lastPaymentDoc = lastPaymentSnapshot.docs[0];
         const lastPaymentData = lastPaymentDoc.data();
         const amountToReverse = lastPaymentData.amount;
@@ -258,49 +256,13 @@ export async function reverseLastPaymentAction(userId: string) {
 
         revalidatePath('/admin/users');
         revalidatePath('/admin/dashboard');
-        revalidatePath('/dashboard'); // Revalidate user dashboard
+        revalidatePath('/dashboard');
         return { success: true, message: `Successfully reversed last payment of ₹${amountToReverse}.` };
-
     } catch (error: any) {
         console.error('Error reversing payment:', error);
         return { success: false, message: error.message || 'Failed to reverse payment.' };
     }
 }
-
-export async function addMissedBillAction(userId: string, formData: FormData) {
-    const validatedFields = MissedBillSchema.safeParse(Object.fromEntries(formData));
-    if (!validatedFields.success) return { success: false, message: 'Invalid bill data.' };
-
-    const { amount, date, notes } = validatedFields.data;
-    const adminDb = getAdminDb();
-    const userRef = adminDb.collection('users').doc(userId);
-
-    try {
-        await adminDb.runTransaction(async (transaction) => {
-            const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) throw new Error("User not found.");
-            const userData = userDoc.data()!;
-
-            const newPending = (userData.pending || 0) + amount;
-            transaction.update(userRef, { pending: newPending, status: 'pending' });
-
-            const billRef = adminDb.collection('bills').doc();
-            transaction.set(billRef, {
-                userId, amount, dueDate: parseISO(date), notes,
-                status: 'pending', createdAt: new Date()
-            });
-        });
-
-        revalidatePath('/admin/users');
-        revalidatePath('/dashboard'); // Revalidate user dashboard
-        return { success: true, message: 'Missed bill added successfully.' };
-    } catch (error: any) {
-        return { success: false, message: error.message || 'Failed to add missed bill.' };
-    }
-}
-
-
-// --- Other Actions ---
 
 export async function updateUserAction(userId: string, formData: FormData) {
     return { success: false, message: 'Update user not implemented yet.' };
@@ -308,94 +270,4 @@ export async function updateUserAction(userId: string, formData: FormData) {
 
 export async function markAsDeceasedAction(userId: string, formData: FormData) {
     return { success: false, message: 'Mark as deceased not implemented yet.' };
-}
-
-export async function sendPaymentLinkAction(userId: string) {
-    return createPaymentLink(userId);
-}
-
-export async function getPendingBillsForUserAction(userId: string): Promise<Bill[]> {
-    if (!userId) return [];
-    const adminDb = getAdminDb();
-    const billsSnapshot = await adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending').orderBy('dueDate', 'asc').get();
-    if (billsSnapshot.empty) return [];
-    return billsSnapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-            id: doc.id,
-            amount: data.amount,
-            date: format(data.dueDate.toDate(), 'dd/MM/yyyy'),
-            notes: data.notes,
-        };
-    });
-}
-
-export async function markBillAsPaidAction(userId: string, billId: string, billAmount: number) {
-    if (!userId || !billId || typeof billAmount === 'undefined') {
-        return { success: false, message: 'Required fields are missing.' };
-    }
-    const adminDb = getAdminDb();
-    const userRef = adminDb.collection('users').doc(userId);
-    const billRef = adminDb.collection('bills').doc(billId);
-
-    try {
-        const billDoc = await billRef.get();
-        if (!billDoc.exists) throw new Error('Bill not found');
-
-        await adminDb.runTransaction(async (transaction) => {
-            const userDoc = await transaction.get(userRef);
-            if (!userDoc.exists) throw new Error('User not found');
-            const userData = userDoc.data()!;
-            const newTotalPaid = (userData.totalPaid || 0) + billAmount;
-            const newPending = Math.max(0, (userData.pending || 0) - billAmount);
-            
-            transaction.update(userRef, {
-                totalPaid: newTotalPaid,
-                pending: newPending,
-                status: newPending <= 0 ? 'paid' : 'pending'
-            });
-            transaction.update(billRef, { status: 'paid' });
-
-            const paymentRef = adminDb.collection('payments').doc();
-            transaction.set(paymentRef, {
-                userId, amount: billAmount, date: new Date(),
-                notes: `Manual payment for bill: ${billDoc.data()?.notes || billId}`,
-                type: 'manual_bill_payment', createdAt: new Date()
-            });
-        });
-        revalidatePath('/admin/users');
-        revalidatePath('/dashboard');
-        return { success: true, message: 'Bill marked as paid!' };
-    } catch (error: any) {
-        return { success: false, message: error.message || 'Failed to mark bill as paid.' };
-    }
-}
-
-export async function deleteUserAction(userId: string) {
-    const adminDb = getAdminDb();
-    const adminAuth = getAdminAuth();
-    if (!userId) return { success: false, message: 'User ID is required.' };
-
-    try {
-        const batch = adminDb.batch();
-        const billsQuery = adminDb.collection('bills').where('userId', '==', userId);
-        const paymentsQuery = adminDb.collection('payments').where('userId', '==', userId);
-        const [billsSnapshot, paymentsSnapshot] = await Promise.all([billsQuery.get(), paymentsQuery.get()]);
-        
-        billsSnapshot.forEach(doc => batch.delete(doc.ref));
-        paymentsSnapshot.forEach(doc => batch.delete(doc.ref));
-        
-        batch.delete(adminDb.collection('users').doc(userId));
-        await batch.commit();
-        await adminAuth.deleteUser(userId);
-        
-        revalidatePath('/admin/users');
-        return { success: true, message: 'User deleted successfully.' };
-    } catch (error: any) {
-        if (error.code === 'auth/user-not-found') {
-            revalidatePath('/admin/users');
-            return { success: true, message: 'User already deleted from Auth.'};
-        }
-        return { success: false, message: 'Failed to delete user.' };
-    }
 }
