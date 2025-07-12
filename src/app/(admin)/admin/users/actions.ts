@@ -3,6 +3,8 @@
 import { getAdminDb, getAdminAuth } from '@/lib/firebase-admin';
 import { revalidatePath } from 'next/cache';
 import { differenceInMonths, parse, startOfMonth, addMonths, lastDayOfMonth, isValid, format, isAfter } from 'date-fns';
+import { getBillingSettings } from '@/app/(admin)/admin/settings/actions';
+import { createPaymentLink } from '@/app/(user)/dashboard/actions';
 import * as admin from 'firebase-admin';
 import { Bill } from '@/lib/data-service';
 
@@ -145,7 +147,6 @@ export async function recalculateBalanceUntilDateAction(userId: string, formData
     }
 }
 
-
 export async function reverseLastPaymentAction(userId: string) {
     const adminDb = getAdminDb();
     if (!userId) return { success: false, message: 'User ID is required.' };
@@ -176,5 +177,34 @@ export async function reverseLastPaymentAction(userId: string) {
         return { success: true, message: `Successfully reversed last payment of ₹${amountToReverse}.` };
     } catch (error: any) {
         return { success: false, message: 'Failed to reverse payment.' };
+    }
+}
+
+export async function deleteUserAction(userId: string) {
+    const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
+    if (!userId) return { success: false, message: 'User ID is required.' };
+
+    try {
+        const batch = adminDb.batch();
+        const billsQuery = adminDb.collection('bills').where('userId', '==', userId);
+        const paymentsQuery = adminDb.collection('payments').where('userId', '==', userId);
+        const [billsSnapshot, paymentsSnapshot] = await Promise.all([billsQuery.get(), paymentsQuery.get()]);
+        
+        billsSnapshot.forEach(doc => batch.delete(doc.ref));
+        paymentsSnapshot.forEach(doc => batch.delete(doc.ref));
+        
+        batch.delete(adminDb.collection('users').doc(userId));
+        await batch.commit();
+        await adminAuth.deleteUser(userId);
+        
+        revalidatePath('/admin/users');
+        return { success: true, message: 'User deleted successfully.' };
+    } catch (error: any) {
+        if (error.code === 'auth/user-not-found') {
+            revalidatePath('/admin/users');
+            return { success: true, message: 'User already deleted from Auth.'};
+        }
+        return { success: false, message: 'Failed to delete user.' };
     }
 }
