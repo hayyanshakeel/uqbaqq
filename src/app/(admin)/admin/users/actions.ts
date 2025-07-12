@@ -44,19 +44,21 @@ export async function getPendingBillsForUserAction(userId: string): Promise<Bill
     const adminDb = getAdminDb();
     const billsSnapshot = await adminDb.collection('bills').where('userId', '==', userId).where('status', '==', 'pending').orderBy('dueDate', 'asc').get();
     if (billsSnapshot.empty) return [];
-    return billsSnapshot.docs.map(doc => ({
-        id: doc.id,
-        amount: doc.data().amount,
-        date: format(doc.data().dueDate.toDate(), 'dd/MM/yyyy'),
-        notes: doc.data().notes,
-    }));
+    return billsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+            id: doc.id,
+            amount: data.amount,
+            date: format(data.dueDate.toDate(), 'dd/MM/yyyy'),
+            notes: data.notes,
+        };
+    });
 }
 
 export async function markBillAsPaidAction(userId: string, billId: string, billAmount: number) {
     if (!userId || !billId || typeof billAmount === 'undefined') {
         return { success: false, message: 'Required fields are missing.' };
     }
-
     const adminDb = getAdminDb();
     const userRef = adminDb.collection('users').doc(userId);
     const billRef = adminDb.collection('bills').doc(billId);
@@ -66,18 +68,15 @@ export async function markBillAsPaidAction(userId: string, billId: string, billA
             const [userDoc, billDoc] = await Promise.all([transaction.get(userRef), transaction.get(billRef)]);
             if (!userDoc.exists) throw new Error('User not found');
             if (!billDoc.exists) throw new Error('Bill not found');
-
             const userData = userDoc.data()!;
             const newTotalPaid = (userData.totalPaid || 0) + billAmount;
             const newPending = (userData.pending || 0) - billAmount;
-
             transaction.update(userRef, {
                 totalPaid: newTotalPaid,
                 pending: newPending < 0 ? 0 : newPending,
                 status: newPending <= 0 ? 'paid' : 'pending'
             });
             transaction.update(billRef, { status: 'paid' });
-
             const paymentRef = adminDb.collection('payments').doc();
             transaction.set(paymentRef, {
                 userId, amount: billAmount, date: new Date(),
@@ -96,7 +95,6 @@ export async function markBillAsPaidAction(userId: string, billId: string, billA
 export async function recalculateBalanceUntilDateAction(userId: string, formData: FormData) {
     const untilMonthStr = formData.get('untilMonth') as string;
     if (!userId || !untilMonthStr) return { success: false, message: 'Required fields are missing.' };
-
     const adminDb = getAdminDb();
     const userRef = adminDb.collection('users').doc(userId);
     const untilDate = lastDayOfMonth(new Date(`${untilMonthStr}-01T12:00:00Z`));
@@ -128,9 +126,7 @@ export async function recalculateBalanceUntilDateAction(userId: string, formData
             let newPending = 0;
             const pendingPeriodStart = startOfMonth(addMonths(untilDate, 1));
             if (isAfter(today, pendingPeriodStart)) {
-                const { monthlyBreakdown: pendingBills } = calculateDuesForPeriod(
-                    format(pendingPeriodStart, 'yyyy-MM-dd'), format(today, 'yyyy-MM-dd')
-                );
+                const { monthlyBreakdown: pendingBills } = calculateDuesForPeriod(format(pendingPeriodStart, 'yyyy-MM-dd'), format(today, 'yyyy-MM-dd'));
                 newPending = pendingBills.reduce((acc, bill) => acc + bill.fee, 0);
                 pendingBills.forEach(bill => {
                     transaction.set(adminDb.collection('bills').doc(), {
@@ -141,11 +137,7 @@ export async function recalculateBalanceUntilDateAction(userId: string, formData
                 });
             }
 
-            transaction.update(userRef, {
-                totalPaid: paidAmount,
-                pending: newPending,
-                status: newPending <= 0 ? 'paid' : 'pending'
-            });
+            transaction.update(userRef, { totalPaid: paidAmount, pending: newPending, status: newPending <= 0 ? 'paid' : 'pending' });
         });
         revalidatePath('/admin/users');
         revalidatePath('/dashboard');
@@ -154,7 +146,6 @@ export async function recalculateBalanceUntilDateAction(userId: string, formData
         return { success: false, message: error.message || 'Failed to recalculate.' };
     }
 }
-
 
 export async function reverseLastPaymentAction(userId: string) {
     const adminDb = getAdminDb();
@@ -179,18 +170,6 @@ export async function reverseLastPaymentAction(userId: string) {
                 pending: admin.firestore.FieldValue.increment(amountToReverse),
                 status: 'pending'
             });
-
-            // Re-open the bill if the payment was for a specific one
-            const paymentNotes = lastPaymentDoc.data().notes || '';
-            if(paymentNotes.includes('Manual payment for bill:')) {
-                const billIdMatch = paymentNotes.split(' ').pop();
-                if(billIdMatch) {
-                    const billRef = adminDb.collection('bills').doc(billIdMatch);
-                    const billDoc = await transaction.get(billRef);
-                    if(billDoc.exists) transaction.update(billRef, { status: 'pending' });
-                }
-            }
-            
             transaction.delete(lastPaymentDoc.ref);
         });
 
@@ -201,6 +180,3 @@ export async function reverseLastPaymentAction(userId: string) {
         return { success: false, message: 'Failed to reverse payment.' };
     }
 }
-
-
-// Other actions (addUser, updateUser, etc.) remain the same...
